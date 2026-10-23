@@ -6,11 +6,21 @@ const {chromium}=require('playwright');
 const root=path.join(__dirname,'..');
 const publicOrigin='https://lume-public.test';
 const activityUrl='https://saladofuturo.educacao.sp.gov.br/lume-bookmarklet-test';
+const simpleActivity='<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"></head><body><h1>Atividade de teste</h1><fieldset><legend>Quanto é dois mais dois?</legend><label><input type="radio" name="q" value="3">Três</label><label><input type="radio" name="q" value="4">Quatro</label></fieldset></body></html>';
+
+function salaActivity() {
+  const radioOption=(text,index)=>`<div class="MuiBox-root optionBox"><div class="MuiBox-root row"><label class="MuiFormControlLabel-root"><span class="MuiButtonBase-root MuiRadio-root"><input type="radio" value="${index}" class="MuiSwitchBase-input"><svg aria-hidden="true" width="16" height="16"><circle cx="8" cy="8" r="6"></circle></svg></span></label><div class="MuiBox-root statement"><div class="ql-editor"><p>${text}</p></div></div></div></div>`;
+  const checkboxOption=(text,index)=>`<div class="MuiBox-root optionBox"><div class="MuiBox-root row"><span class="MuiButtonBase-root MuiCheckbox-root"><input type="checkbox" value="${index}" class="MuiSwitchBase-input"><svg aria-hidden="true" width="16" height="16"><rect x="2" y="2" width="12" height="12"></rect></svg></span><div class="MuiBox-root statement"><div class="ql-editor"><p>${text}</p></div></div></div></div>`;
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"></head><body><main>
+    <section id="sala-single-card" class="MuiPaper-root MuiBox-root"><div class="MuiBox-root"><h2>Questão 01 de 02</h2><div class="ql-editor"><p>Quanto é dois mais dois? Marque uma alternativa.</p></div></div><div class="MuiFormGroup-root" role="radiogroup">${['Dois','Quatro','Seis','Oito'].map(radioOption).join('')}</div></section>
+    <section id="sala-multi-card" class="MuiPaper-root MuiBox-root"><div class="MuiBox-root"><h2>Questão 02 de 02</h2><div class="ql-editor"><p>Quais números são primos? Marque todas as alternativas corretas.</p></div></div><div class="MuiBox-root choice-list">${['2','4','7','9'].map(checkboxOption).join('')}</div></section>
+  </main></body></html>`;
+}
 let browser;
 before(async()=>{browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});});
 after(async()=>{await browser?.close();});
 
-async function setup({scriptDelay=0,missingScript=false}={}) {
+async function setup({scriptDelay=0,missingScript=false,activityHtml=simpleActivity}={}) {
   const context=await browser.newContext();
   context.setDefaultTimeout(10000);
   const requests=[];
@@ -22,7 +32,8 @@ async function setup({scriptDelay=0,missingScript=false}={}) {
     if(resource==='/api/solve') {
       if(route.request().method()==='OPTIONS')return route.fulfill({status:204,headers:{'Access-Control-Allow-Origin':new URL(activityUrl).origin,'Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'content-type'}});
       requests.push({authorization:route.request().headers().authorization,payload:route.request().postDataJSON()});
-      return route.fulfill({headers:{'Access-Control-Allow-Origin':new URL(activityUrl).origin},json:{indices:[1],explanation:'Dois mais dois são quatro.',confidence:'high'}});
+      const question=requests[requests.length-1].payload.question;
+      return route.fulfill({headers:{'Access-Control-Allow-Origin':new URL(activityUrl).origin},json:{indices:question.multiple?[0,2]:[1],explanation:'Resposta simulada para verificar a leitura e a marcação.',confidence:'high'}});
     }
     if(resource==='/bookmarklet.js') {
       bundleRequests++;
@@ -33,7 +44,7 @@ async function setup({scriptDelay=0,missingScript=false}={}) {
     if(!['index.html','install.js','style.css','hub-groq.js','bookmarklet.js'].includes(filename))return route.fulfill({status:404,body:'Not found'});
     return route.fulfill({contentType:filename.endsWith('.js')?'application/javascript':filename.endsWith('.css')?'text/css':'text/html',body:readFileSync(path.join(root,'dist',filename),'utf8')});
   });
-  await context.route(activityUrl,route=>route.fulfill({contentType:'text/html',headers:{'Content-Security-Policy':"form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors *.educacao.sp.gov.br *.ip.tv; upgrade-insecure-requests"},body:'<!doctype html><html lang="pt-BR"><body><h1>Atividade de teste</h1><fieldset><legend>Quanto é dois mais dois?</legend><label><input type="radio" name="q" value="3">Três</label><label><input type="radio" name="q" value="4">Quatro</label></fieldset></body></html>'}));
+  await context.route(activityUrl,route=>route.fulfill({contentType:'text/html; charset=utf-8',headers:{'Content-Security-Policy':"form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors *.educacao.sp.gov.br *.ip.tv; upgrade-insecure-requests"},body:activityHtml}));
   const installer=await context.newPage();
   await installer.goto(publicOrigin);
   const link=installer.locator('#bookmarklet-link');
@@ -95,5 +106,31 @@ test('a blocked or missing bookmarklet bundle gives an actionable alert and perm
     assert.equal(await fixture.activity.locator('#lume-groq-hub').count(),0);
     assert.equal(fixture.requests.length,0);
     assert.equal(fixture.activity.url(),activityUrl);
+  } finally {await fixture.context.close();}
+});
+
+test('bookmarklet reads Sala MUI sibling statements and unnamed checkbox groups before selecting both question types',async()=>{
+  const fixture=await setup({activityHtml:salaActivity()});
+  const {activity,requests}=fixture;
+  try {
+    await fixture.invoke();
+    await activity.waitForFunction(()=>document.querySelector('#sala-single-card input[value="1"]').checked && document.querySelector('#sala-multi-card input[value="2"]').checked && document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.toasts').textContent.includes('Respostas: 2'));
+    assert.equal(requests.length,2,'Adjacent Sala cards must remain two separate questions');
+    const single=requests.find(request=>!request.payload.question.multiple)?.payload.question;
+    const multiple=requests.find(request=>request.payload.question.multiple)?.payload.question;
+    assert.ok(single,'A radiogroup with an icon-only label must be detected');
+    assert.ok(multiple,'Unnamed checkboxes outside a fieldset must form their own group');
+    assert.match(single.prompt,/Quanto é dois mais dois/);
+    assert.ok(!single.prompt.includes('números são primos'));
+    assert.match(multiple.prompt,/Quais números são primos/);
+    assert.ok(!multiple.prompt.includes('dois mais dois'));
+    assert.deepEqual(single.options.map(option=>option.text),['Dois','Quatro','Seis','Oito']);
+    assert.deepEqual(multiple.options.map(option=>option.text),['2','4','7','9']);
+    assert.deepEqual(await activity.locator('#sala-single-card input:checked').evaluateAll(inputs=>inputs.map(input=>input.value)),['1']);
+    assert.deepEqual(await activity.locator('#sala-multi-card input:checked').evaluateAll(inputs=>inputs.map(input=>input.value)),['0','2']);
+    assert.equal(requests.every(request=>request.authorization===undefined),true);
+    assert.equal(fixture.directCount(),0);
+    assert.equal(fixture.bundleCount(),1);
+    assert.equal(activity.url(),activityUrl);
   } finally {await fixture.context.close();}
 });

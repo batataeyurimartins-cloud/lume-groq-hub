@@ -5,8 +5,8 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   const metadata = new WeakMap();
   let serial = 0;
   const CONTROL = 'input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"]';
+  const MUI_CONTROL = '.MuiRadio-root,.MuiCheckbox-root,.MuiFormControlLabel-root';
   const CONTAINER = '.que,.question,.question-container,.question-item,.quiz-question,.pergunta,[data-question],[data-question-id],[data-testid="question"],[data-testid="question-container"],fieldset,[role="radiogroup"],[role="group"]';
-  const PROMPT = '.qtext,.question-text,.question-title,.prompt,.enunciado,[data-question-text],[data-testid="question-title"],legend';
   const uid = element => {
     if (!ids.has(element)) ids.set(element, ++serial);
     return ids.get(element);
@@ -24,6 +24,10 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   }
   const native = element => element.tagName === 'INPUT' && /^(radio|checkbox)$/i.test(element.type);
   const typeOf = element => native(element) ? element.type : element.getAttribute('role');
+  function choiceControls(root) {
+    return Array.from(root.querySelectorAll(CONTROL)).filter(element => native(element) ||
+      !element.querySelector('input[type="radio"],input[type="checkbox"]'));
+  }
   function labelsFor(element) {
     const labels = native(element) ? Array.from(element.labels || []) : [];
     const wrapping = element.closest('label');
@@ -36,8 +40,19 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   }
   function optionWrapper(element) {
     const labels = labelsFor(element);
-    if (labels.length) return labels[0];
+    const readableLabel = labels.find(label => normalize(label.textContent));
+    if (readableLabel) return readableLabel;
     if (!native(element)) return element;
+    // Sala's MUI label contains only the radio icon; the statement is in a
+    // sibling div. Include their shared row, without crossing another choice.
+    if (element.closest(MUI_CONTROL)) {
+      let row = element.parentElement;
+      for (let level = 0; row && level < 6; level++, row = row.parentElement) {
+        if (row.matches('body,html,form,fieldset,[role="radiogroup"]') || choiceControls(row).length !== 1) break;
+        if (normalize(row.textContent)) return row;
+      }
+    }
+    if (labels.length) return labels[0];
     const candidate = element.closest('li,.option,.answer,.choice,.alternative,.alternativa,.MuiFormControlLabel-root');
     if (candidate && candidate.querySelectorAll(CONTROL).length === 1) return candidate;
     const parent = element.parentElement;
@@ -47,7 +62,8 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
     const explicit = normalize(element.getAttribute('aria-label'));
     if (explicit) return explicit;
     const labels = labelsFor(element).filter(label => visible(label));
-    if (labels.length) return normalize(labels.map(label => label.textContent).join(' '));
+    const labelText = normalize(labels.map(label => label.textContent).join(' '));
+    if (labelText) return labelText;
     const wrapper = optionWrapper(element);
     if (wrapper !== element || !native(element)) return normalize(wrapper.textContent);
     let text = '';
@@ -59,7 +75,29 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   }
   function eligible(element) {
     return element && element.matches(CONTROL) && !isExcluded(element) &&
-      (visible(element) || labelsFor(element).some(visible));
+      (visible(element) || labelsFor(element).some(visible) ||
+        (native(element) && element.closest(MUI_CONTROL) && visible(optionWrapper(element))));
+  }
+  function muiChoiceList(element) {
+    if (!native(element) || !element.closest(MUI_CONTROL)) return null;
+    const row = optionWrapper(element);
+    if (!normalize(row.textContent)) return null;
+    let parent = row.parentElement;
+    for (let level = 0; parent && level < 6; level++, parent = parent.parentElement) {
+      if (parent.matches('body,html,form')) return null;
+      const choices = choiceControls(parent);
+      if (choices.length < 2) {
+        if (parent.matches('article,section,.MuiPaper-root')) return null;
+        continue;
+      }
+      if (choices.length > 30 || choices.some(choice => typeOf(choice) !== typeOf(element))) return null;
+      const rows = choices.map(optionWrapper);
+      // Each option must occupy its own row. This keeps neighboring question
+      // containers from becoming one list merely because they share a page.
+      if (rows.some(optionRow => optionRow === parent) || new Set(rows).size !== choices.length) return null;
+      return parent;
+    }
+    return null;
   }
   function canonical(element) {
     if (element.matches(CONTROL)) return element;
@@ -135,11 +173,14 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
     for (const element of controls) {
       const type = typeOf(element);
       const explicitRoot = settings.containerSelector ? element.closest(settings.containerSelector) : element.closest(CONTAINER);
+      const inferredList = !explicitRoot && !element.name ? muiChoiceList(element) : null;
       let key;
       if (native(element) && type === 'radio' && element.name) {
         key = `radio:${uid(element.form || element.getRootNode())}:${element.name}`;
       } else if (explicitRoot) {
         key = `${type}:root:${uid(explicitRoot)}`;
+      } else if (inferredList) {
+        key = `${type}:root:${uid(inferredList)}`;
       } else if (native(element) && element.name) {
         key = `${type}:${uid(element.form || element.getRootNode())}:${element.name}`;
       } else {
@@ -164,7 +205,7 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
       }
       let prompt = promptText(root, members, settings);
       // Common layouts put the question immediately above an options-only container.
-      for (let level = 0; !prompt && level < 3 && !settings.containerSelector; level++) {
+      for (let level = 0; !prompt && level < 7 && !settings.containerSelector; level++) {
         const parent = root.parentElement;
         if (!parent || /^(BODY|HTML)$/.test(parent.tagName) || controls.some(control => parent.contains(control) && !members.includes(control))) break;
         root = parent;

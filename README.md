@@ -1,6 +1,6 @@
 # Lume · Favorito automático com Groq
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê, responde e marca as alternativas, com notificações em cada etapa. Versão **3.1.0**.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê, responde e marca as alternativas, com notificações em cada etapa. Versão **3.1.1**.
 
 ## Instalar o bookmarklet
 
@@ -11,6 +11,8 @@ Hub público e compacto (286 px), sem lista ou contagem de questões detectadas.
 O acesso é público: não exige código de acesso ou chave da Groq do visitante. Se o navegador não permitir arrastar o botão, use **Copiar bookmarklet**, crie um favorito e cole o código no campo de endereço desse favorito.
 
 O bookmarklet é um carregador pequeno de `/bookmarklet.js`, para evitar um endereço de favorito com dezenas de milhares de caracteres. Ele carrega a versão atual do hub, mantém a atividade aberta e evita painéis duplicados. O painel continua oferecendo pausar, minimizar, mover e desfazer a última marcação.
+
+Após uma atualização, feche o hub no **×** e clique no mesmo favorito para carregar a nova versão. O hub que já estava aberto continua usando a versão anterior até ser fechado. Recarregar a atividade também remove esse hub.
 
 ## Uso
 
@@ -38,6 +40,8 @@ Se `PUBLIC_HUB` não for `true`, o endpoint mantém o modo privado e exige `HUB_
 ## Compatibilidade
 
 O leitor atende controles HTML `radio` e `checkbox` e controles acessíveis com `role="radio"` ou `role="checkbox"`. Antes de marcar, verifica se o enunciado, as alternativas e os elementos ainda correspondem à questão consultada. Depois, confere se a seleção realmente ocorreu.
+
+Os componentes SINGLE e MULTI da Sala do Futuro usam controles MUI com o texto da alternativa em um bloco separado. O leitor reconhece essas linhas e agrupa as caixas de seleção sem depender de um atributo `name`. Esse formato foi reproduzido em testes de navegador a partir dos componentes públicos da plataforma. Quando não reconhece alternativas, o painel informa a falha de leitura.
 
 Layouts próprios, questões discursivas, ordenação, arrastar e soltar, canvas, Shadow DOM de outros componentes e frames de outro domínio podem exigir adaptadores específicos. Não há OCR: imagens, gráficos, áudio e vídeo não são enviados ao modelo.
 

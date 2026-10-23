@@ -1,6 +1,6 @@
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.1.0';
+  const version = '3.1.1';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
@@ -157,7 +157,17 @@ function mountLumeHub() {
           notify(warning);
         }
         const question = result.questions.find(item => !state.handled.has(keyFor(item)));
-        if (!question) { status('Ativo · aguardando novas questões'); break; }
+        if (!question) {
+          if (result.questions.length === 0) {
+            status(result.warnings?.length ? 'Leitura precisa de ajuste' : 'Nenhuma alternativa reconhecida');
+            const warning = 'Não consegui reconhecer as alternativas desta página.';
+            if (!state.warnings.has(warning)) {
+              state.warnings.add(warning);
+              notify(warning);
+            }
+          } else status('Concluído · aguardando próxima questão');
+          break;
+        }
         const key = keyFor(question);
         const pageUrl = location.href;
         if (!adapter.isCurrent(question)) { state.dirty = true; break; }
@@ -166,8 +176,10 @@ function mountLumeHub() {
         notify('Questão detectada');
         status('Buscando resposta…');
         notify('Buscando resposta…');
+        let querying = true;
         try {
           const answer = await client.solve({ apiKey: state.key, model: state.model, question, signal: controller.signal });
+          querying = false;
           if (state.closed || !state.active || run !== state.run || controller.signal.aborted) break;
           if (location.href !== pageUrl || !adapter.isCurrent(question)) {
             notify('A questão mudou. Lendo a página novamente…');
@@ -201,6 +213,7 @@ function mountLumeHub() {
           if (state.closed || !state.active || run !== state.run || controller.signal.aborted || error.code === 'ABORTED') break;
           state.handled.set(key, { status: 'error' });
           pause(false);
+          if (querying) status('Erro na consulta · veja o aviso');
           notify(error.message || 'Não foi possível responder. Tente iniciar novamente.', 'error');
           break;
         } finally {

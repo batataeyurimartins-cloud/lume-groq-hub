@@ -23,7 +23,7 @@ async function setup(options = {}) {
       confidence: 'high', indices: [1], delay: 60, current: true,
       applySelected: true, applyDelay: 20, solveFailures: 0,
       applies: 0, solves: 0, completed: 0, aborted: 0,
-      storageWrites: 0, sharedFingerprint: false, toastEvents: [], confirmedIds: [], ...options,
+      storageWrites: 0, sharedFingerprint: false, toastEvents: [], confirmedIds: [], scanWarnings: [], ...options,
     };
     const originalSetItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function (...args) {
@@ -40,7 +40,7 @@ async function setup(options = {}) {
           element,
           options: [...element.querySelectorAll('input')].map((option, index) => ({ index, text: option.value, element: option, type: 'radio' })),
         })) : [],
-        warnings: [],
+        warnings: window.uiTest.scanWarnings,
       }),
       isCurrent: question => window.uiTest.current && question.element.isConnected,
       apply: async (question, indices) => {
@@ -189,6 +189,34 @@ test('automatic mode marks low-confidence answers without an extra manual action
   } finally { await page.close(); }
 });
 
+test('empty scans explain unreadable alternatives once, then distinguish completed questions and scan warnings', async () => {
+  const page = await setup({ current: false });
+  try {
+    await start(page);
+    await page.getByText('Nenhuma alternativa reconhecida', { exact: true }).waitFor();
+    assert.equal(await metric(page, 'solves'), 0);
+    const warning = 'Não consegui reconhecer as alternativas desta página.';
+    assert.equal((await metric(page, 'toastEvents')).filter(message => message.includes(warning)).length, 1);
+    await page.evaluate(() => document.querySelector('main').append(document.createElement('p')));
+    await page.waitForTimeout(350);
+    assert.equal((await metric(page, 'toastEvents')).filter(message => message.includes(warning)).length, 1);
+    await page.evaluate(() => {
+      window.uiTest.current = true;
+      document.querySelector('main').append(document.createElement('p'));
+    });
+    await waitForAnswer(page);
+    await page.getByText('Concluído · aguardando próxima questão', { exact: true }).waitFor();
+    assert.equal(await metric(page, 'solves'), 1);
+  } finally { await page.close(); }
+
+  const warnedPage = await setup({ current: false, scanWarnings: ['Um grupo sem enunciado legível foi ignorado.'] });
+  try {
+    await start(warnedPage);
+    await warnedPage.getByText('Leitura precisa de ajuste', { exact: true }).waitFor();
+    assert.equal(await metric(warnedPage, 'solves'), 0);
+  } finally { await warnedPage.close(); }
+});
+
 test('abstention and unconfirmed selection never increment the response counter', async () => {
   for (const options of [{ indices: [] }, { applySelected: false }]) {
     const page = await setup(options);
@@ -247,6 +275,7 @@ test('errors do not repeat forever; an explicit restart can retry a failed quest
   try {
     await start(page);
     await page.waitForFunction(() => window.uiTest.completed === 1);
+    await page.getByText('Erro na consulta · veja o aviso', { exact: true }).waitFor();
     await page.evaluate(() => document.querySelector('main').append(document.createElement('p')));
     await page.waitForTimeout(400);
     assert.equal(await metric(page, 'solves'), 1);
