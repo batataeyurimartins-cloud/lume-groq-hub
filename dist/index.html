@@ -5,47 +5,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta name="referrer" content="no-referrer">
-  <meta name="description" content="Instale o Lume: um hub compacto para responder e marcar questões na própria página da atividade.">
-  <title>Lume — seu hub, pronto para usar</title>
+  <meta name="description" content="Leve o Lume para a sua barra de favoritos e abra seu hub automático com um clique na página da atividade.">
+  <title>Lume — seu hub a um clique</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/install.js" defer></script>
 </head>
 <body>
   <header class="header wrap">
     <a class="brand" href="/" aria-label="Lume, início"><span class="brand-icon" aria-hidden="true">✳</span><strong>lume</strong><span class="brand-caption">/ GROQ</span></a>
-    <span class="header-note"><span aria-hidden="true"></span>Um pouco de clareza</span>
+    <span class="header-note"><span aria-hidden="true"></span>Público · pronto para usar</span>
   </header>
-
   <main class="wrap layout">
     <section class="intro" aria-labelledby="title">
-      <div class="eyebrow"><span aria-hidden="true">✧</span> Pequeno no tamanho. Pronto para ajudar.</div>
-      <h1 id="title">Seu hub,<br>pronto para <span>usar.</span></h1>
-      <p class="lead">O Lume fica na própria atividade, responde e marca as alternativas automaticamente. Você acompanha cada etapa em notificações discretas.</p>
-      <ol class="steps" aria-label="Como usar">
-        <li><span class="step-number">01</span><div><strong>Abra a atividade</strong><p>Entre na plataforma e abra a página com as questões.</p></div></li>
-        <li><span class="step-number">02</span><div><strong>Copie o script</strong><p>Informe seu código de acesso e prepare o script.</p></div></li>
-        <li><span class="step-number">03</span><div><strong>Cole no console</strong><p>Na página da atividade, abra o console, cole o script e pressione Enter.</p></div></li>
+      <div class="eyebrow"><span aria-hidden="true">✧</span> Seu hub, sempre por perto.</div>
+      <h1 id="title">Salve uma vez.<br>Use em <span>um clique.</span></h1>
+      <p class="lead">O Lume fica nos seus favoritos. Abra uma atividade, clique no favorito e acompanhe as respostas automáticas em um painel pequeno e discreto.</p>
+      <ol class="steps" aria-label="Como instalar e usar">
+        <li><span class="step-number">01</span><div><strong>Mostre a barra de favoritos</strong><p>No computador, use <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd>. No Mac, <kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd>.</p></div></li>
+        <li><span class="step-number">02</span><div><strong>Arraste o botão para a barra</strong><p>Salve o botão “Lume automático” nos favoritos do navegador.</p></div></li>
+        <li><span class="step-number">03</span><div><strong>Abra a atividade e clique no favorito</strong><p>O hub aparece na própria página e começa a responder e marcar.</p></div></li>
       </ol>
     </section>
-
     <section class="installer" aria-labelledby="installer-title">
-      <div class="card-head"><span class="card-symbol" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M5 15 15 5M5 5h10v10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>Seu próximo passo</span><span class="pill">INSTALAR</span></div>
-      <h2 id="installer-title">Leve o Lume com você.</h2>
-      <p class="card-copy">Um script. Um painel pequeno. Tudo na página que você já está usando.</p>
-      <form id="install-form" novalidate>
-        <label for="access-token">Código de acesso</label>
-        <div class="token-field"><input id="access-token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Cole seu código aqui" aria-describedby="token-help"><button class="reveal" id="reveal-token" type="button" aria-label="Mostrar código de acesso" aria-pressed="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="2.6" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
-        <p class="help" id="token-help">O código libera seu hub e fica apenas na memória desta página.</p>
-        <button class="primary" id="copy-script" type="submit"><svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M12 4V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>Copiar script</span></button>
-        <button class="download" id="download-script" type="button">Baixar arquivo .js <span aria-hidden="true">↓</span></button>
-      </form>
+      <div class="card-head"><span class="card-symbol" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M5 15 15 5M5 5h10v10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>Leve para seus favoritos</span><span class="pill">BOOKMARKLET</span></div>
+      <h2 id="installer-title">Seu hub a um clique.</h2>
+      <p class="card-copy">Arraste o botão abaixo para a barra de favoritos. Depois, use-o na página da atividade.</p>
+      <a class="primary bookmarklet" id="bookmarklet-link" href="javascript:void(0)" draggable="true" title="Arraste para a barra de favoritos"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5 3.5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1V17l-5-3-5 3V3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg><span>Lume automático</span><span class="drag-hint" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" fill="none"><path d="M5 15 15 5M5 5h10v10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span></a>
+      <p class="drag-note">Arraste para a barra de favoritos <span aria-hidden="true">↑</span></p>
+      <div class="bookmark-actions"><button class="download" id="copy-bookmarklet" type="button">Copiar bookmarklet</button><span aria-hidden="true">·</span><button class="download" id="download-bookmark" type="button">Baixar favorito</button></div>
       <p class="feedback" id="feedback" role="status" aria-live="polite" hidden></p>
-      <div class="fallback" id="copy-fallback" hidden><label for="generated-script">Seu script está pronto</label><p class="help">Selecione o código abaixo e copie para o console da atividade.</p><textarea id="generated-script" readonly spellcheck="false" rows="7" aria-label="Script gerado para copiar"></textarea><button class="select-code" id="select-script" type="button">Selecionar código</button></div>
-      <div class="console-tip"><span class="tip-icon" aria-hidden="true">⌘</span><p><strong>Onde colar?</strong> No computador, abra as ferramentas do navegador com <kbd>F12</kbd> e selecione <strong>Console</strong> na página da atividade.</p></div>
-      <div class="card-foot"><span class="tiny-dot" aria-hidden="true"></span>O hub inicia assim que o script é executado.</div>
+      <div class="fallback" id="copy-fallback" hidden><label for="generated-script" id="generated-label">Seu código está pronto</label><p class="help" id="generated-help"></p><textarea id="generated-script" readonly spellcheck="false" rows="6" aria-label="Código gerado para copiar"></textarea><button class="select-code" id="select-script" type="button">Selecionar código</button></div>
+      <details class="console-fallback"><summary>Usar pelo console</summary><p class="help">Se o site bloquear o favorito, copie o script completo e execute no console da atividade. No computador, abra <kbd>F12</kbd> e selecione <strong>Console</strong>.</p><button class="secondary-action" id="copy-script" type="button">Copiar script para o console</button><button class="download" id="download-script" type="button">Baixar script .js <span aria-hidden="true">↓</span></button></details>
+      <p class="help mobile-tip">No celular, copie o bookmarklet e edite o endereço de um favorito para colar o código. O suporte varia entre navegadores.</p>
+      <div class="card-foot"><span class="tiny-dot" aria-hidden="true"></span>Público. Sem código de acesso ou chave para instalar.</div>
     </section>
   </main>
-
   <footer class="footer wrap"><span>Lume <span class="footer-divider">/</span> Feito para caber no seu fluxo.</span><p>A IA pode errar. Confira as respostas marcadas.</p></footer>
 </body>
 </html>

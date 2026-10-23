@@ -1,10 +1,10 @@
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.0.1';
+  const version = '3.1.0';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
-  const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && typeof suppliedConfig.token === 'string'
-    ? { endpoint: suppliedConfig.endpoint, token: suppliedConfig.token } : null;
+  const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
+    ? { endpoint: suppliedConfig.endpoint, public: suppliedConfig.public === true, token: suppliedConfig.public === true ? '' : suppliedConfig.token } : null;
   if (window[globalName]?.version === version && !hostedConfig) {
     window[globalName].focus();
     return;
@@ -127,7 +127,7 @@ function mountLumeHub() {
   }
   function start() {
     if (state.closed || state.active || state.processing) return;
-    if (!state.key) {
+    if (!state.key && !hostedConfig?.public) {
       setSettings(true);
       $('.api-key').focus();
       notify('Adicione sua chave da Groq para iniciar.', 'error');
@@ -277,7 +277,7 @@ function mountLumeHub() {
     host.remove();
     if (window[globalName]?.close === close) delete window[globalName];
   }
-  window[globalName] = { version, focus: () => setMinimized(false), close };
+  window[globalName] = { version, mode: hostedConfig?.public ? 'public' : hostedConfig ? 'private' : 'direct', focus: () => setMinimized(false), close };
   on($('.settings-toggle'), 'click', () => setSettings(!state.settingsOpen));
   on($('.toggle'), 'click', () => state.active ? pause() : start());
   on($('.save-settings'), 'click', () => {

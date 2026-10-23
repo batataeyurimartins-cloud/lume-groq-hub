@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { createSolveHandler } from '../api/solve.js';
+import { createSolveHandler, createRequestLimiter } from '../api/solve.js';
 import { createGroqClient } from '../src/groq-client.js';
 
 const origin = 'https://saladofuturo.educacao.sp.gov.br';
@@ -187,16 +187,96 @@ test('client disconnect propagates an AbortSignal and listeners are cleaned up',
   assert.equal(res.listenerCount('close'),0);
 });
 
-test('per-instance limiter allows 60 requests/minute, rejects extras, and resets',async()=>{
+test('public per-instance limiter allows60 total requests/minute across IPs and resets',async()=>{
   let time=100000;
   let calls=0;
-  const handler=createSolveHandler({env,now:()=>time,client:{solve:async()=>{calls++;return answer;}}});
-  for(let index=0;index<60;index++) assert.equal((await invoke({handler})).res.statusCode,200);
-  const limited=await invoke({handler});
+  const handler=createSolveHandler({env:{...env,PUBLIC_HUB:'true'},now:()=>time,client:{solve:async()=>{calls++;return answer;}}});
+  for(let index=0;index<60;index++) assert.equal((await invoke({handler,headers:{authorization:'','x-vercel-forwarded-for':`192.0.2.${Math.floor(index/20)+1}`}})).res.statusCode,200);
+  const limited=await invoke({handler,headers:{authorization:'','x-vercel-forwarded-for':'192.0.2.4'}});
   assert.equal(limited.res.statusCode,429);
   assert.equal(limited.res.headers['retry-after'],'60');
   assert.equal(calls,60);
   time+=60000;
-  assert.equal((await invoke({handler})).res.statusCode,200);
+  assert.equal((await invoke({handler,headers:{authorization:''}})).res.statusCode,200);
   assert.equal(calls,61);
+});
+
+test('public mode allows anonymous requests with or without an old private token configured',async()=>{
+  for(const configuration of [{...env,PUBLIC_HUB:'true'},{GROQ_API_KEY:env.GROQ_API_KEY,PUBLIC_HUB:'true'}]) {
+    const handler=createSolveHandler({env:configuration,client:defaultClient});
+    for(const authorization of ['', 'Bearer obsolete_or_incorrect_token']) {
+      const {res}=await invoke({handler,headers:{authorization}});
+      assert.equal(res.statusCode,200);
+      assert.deepEqual(res.body,answer);
+      assert.ok(!res.text.includes(env.HUB_ACCESS_TOKEN));
+      assert.ok(!res.text.includes(env.GROQ_API_KEY));
+    }
+    const cli=await invoke({handler,headers:{authorization:'',origin:''}});
+    assert.equal(cli.res.statusCode,200);
+  }
+});
+
+test('public mode keeps origin, provider configuration, payload and model protections',async()=>{
+  const handler=createSolveHandler({env:{...env,PUBLIC_HUB:'true'},client:defaultClient});
+  const denied=await invoke({handler,headers:{origin:'https://evil.example',authorization:''}});
+  assert.equal(denied.res.statusCode,403);
+  assert.equal(denied.res.headers['access-control-allow-origin'],undefined);
+  const malformed=await invoke({handler,headers:{authorization:''},body:{question,model:'not-permitted'}});
+  assert.equal(malformed.res.statusCode,400);
+  const missingKey=createSolveHandler({env:{PUBLIC_HUB:'true',HUB_ACCESS_TOKEN:env.HUB_ACCESS_TOKEN},client:defaultClient});
+  const unconfigured=await invoke({handler:missingKey,headers:{authorization:''}});
+  assert.equal(unconfigured.res.statusCode,503);
+  assert.equal(unconfigured.res.body.error.code,'CONFIG');
+  for(const value of ['false','TRUE',true,undefined]) {
+    const privateHandler=createSolveHandler({env:{...env,PUBLIC_HUB:value},client:defaultClient});
+    assert.equal((await invoke({handler:privateHandler,headers:{authorization:''}})).res.statusCode,401);
+  }
+});
+
+test('public per-IP budget limits each caller to20/minute and prefers trusted Vercel IP',async()=>{
+  let time=200000;
+  const handler=createSolveHandler({env:{...env,PUBLIC_HUB:'true'},now:()=>time,client:defaultClient});
+  for(let index=0;index<20;index++) {
+    const {res}=await invoke({handler,headers:{authorization:'','x-vercel-forwarded-for':'198.51.100.7','x-forwarded-for':`203.0.113.${index}`}});
+    assert.equal(res.statusCode,200);
+  }
+  const limited=await invoke({handler,headers:{authorization:'','x-vercel-forwarded-for':'198.51.100.7','x-forwarded-for':'203.0.113.200'}});
+  assert.equal(limited.res.statusCode,429);
+  assert.equal(limited.res.headers['retry-after'],'60');
+  assert.equal(limited.res.headers['access-control-allow-origin'],origin);
+  const another=await invoke({handler,headers:{authorization:'','x-vercel-forwarded-for':'198.51.100.8'}});
+  assert.equal(another.res.statusCode,200);
+  time+=60000;
+  const reset=await invoke({handler,headers:{authorization:'','x-vercel-forwarded-for':'198.51.100.7'}});
+  assert.equal(reset.res.statusCode,200);
+});
+
+test('IP sanitization rejects arbitrary header identities and falls back to the socket',async()=>{
+  const handler=createSolveHandler({env:{...env,PUBLIC_HUB:'true'},client:defaultClient});
+  for(let index=0;index<20;index++) {
+    const req=makeRequest({headers:{authorization:'','x-vercel-forwarded-for':`not-an-ip-${index}`,'x-forwarded-for':`192.0.2.${index}`}});
+    req.socket={remoteAddress:'127.0.0.1'};
+    const res=makeResponse();
+    await handler(req,res);
+    assert.equal(res.statusCode,200);
+  }
+  const req=makeRequest({headers:{authorization:'','x-vercel-forwarded-for':'still-not-an-ip'}});
+  req.socket={remoteAddress:'::ffff:127.0.0.1'};
+  const res=makeResponse();
+  await handler(req,res);
+  assert.equal(res.statusCode,429,'IPv4 and IPv4-mapped socket addresses share one budget');
+});
+
+test('IP bucket memory is bounded and expired buckets are removed',()=>{
+  let time=0;
+  const limiter=createRequestLimiter({now:()=>time,maxBuckets:2});
+  assert.equal(limiter.consume('192.0.2.1').allowed,true);
+  assert.equal(limiter.consume('192.0.2.2').allowed,true);
+  assert.equal(limiter.consume('192.0.2.3').allowed,false);
+  assert.equal(limiter.size,2);
+  for(let index=0;index<100;index++) limiter.consume(`203.0.113.${index}`);
+  assert.equal(limiter.size,2);
+  time=60000;
+  assert.equal(limiter.consume('192.0.2.3').allowed,true);
+  assert.equal(limiter.size,1);
 });

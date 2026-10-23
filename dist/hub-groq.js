@@ -1,4 +1,4 @@
-/* Lume · Hub Groq v3.0.1 | Cole o arquivo inteiro no console da atividade. */
+/* Lume · Hub Groq v3.1.0 | Hub compacto com respostas e marcação automática. */
 (() => {
 'use strict';
 
@@ -460,8 +460,8 @@ function createGroqClient({
 
 
 // hosted-client.js
-// The browser holds an app access code; the Groq key remains on the server.
-function createHostedClient({ endpoint, token, fetchImpl = globalThis.fetch, timeoutMs = 45000 } = {}) {
+// Public bookmarks never contain credentials; the Groq key stays on the server.
+function createHostedClient({ endpoint, token, public: publicAccess = false, fetchImpl = globalThis.fetch, timeoutMs = 45000 } = {}) {
   let url;
   try { url = new URL(endpoint); } catch { throw new Error('Endereço do servidor inválido. Copie o script novamente no instalador.'); }
   if (url.protocol !== 'https:' || url.pathname !== '/api/solve' || url.username || url.password || url.search || url.hash) {
@@ -481,7 +481,7 @@ function createHostedClient({ endpoint, token, fetchImpl = globalThis.fetch, tim
   };
   async function solve({ question, model = 'openai/gpt-oss-120b', signal } = {}) {
     if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
-    if (!token || !question || typeof question.prompt !== 'string' || !Array.isArray(question.options)) throw failure('INPUT', messages.INPUT);
+    if ((!publicAccess && !token) || !question || typeof question.prompt !== 'string' || !Array.isArray(question.options)) throw failure('INPUT', messages.INPUT);
     const data = { question: { prompt: question.prompt, multiple: question.multiple === true, options: question.options.map(option => ({ text: option.text })) }, model };
     const controller = new AbortController();
     let timedOut = false;
@@ -490,7 +490,7 @@ function createHostedClient({ endpoint, token, fetchImpl = globalThis.fetch, tim
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
     try {
       const response = await fetchImpl(url.href, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(!publicAccess ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(data), signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error',
       });
       let answer;
@@ -523,11 +523,11 @@ function createHostedClient({ endpoint, token, fetchImpl = globalThis.fetch, tim
 // hub.js
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.0.1';
+  const version = '3.1.0';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
-  const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && typeof suppliedConfig.token === 'string'
-    ? { endpoint: suppliedConfig.endpoint, token: suppliedConfig.token } : null;
+  const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
+    ? { endpoint: suppliedConfig.endpoint, public: suppliedConfig.public === true, token: suppliedConfig.public === true ? '' : suppliedConfig.token } : null;
   if (window[globalName]?.version === version && !hostedConfig) {
     window[globalName].focus();
     return;
@@ -650,7 +650,7 @@ function mountLumeHub() {
   }
   function start() {
     if (state.closed || state.active || state.processing) return;
-    if (!state.key) {
+    if (!state.key && !hostedConfig?.public) {
       setSettings(true);
       $('.api-key').focus();
       notify('Adicione sua chave da Groq para iniciar.', 'error');
@@ -800,7 +800,7 @@ function mountLumeHub() {
     host.remove();
     if (window[globalName]?.close === close) delete window[globalName];
   }
-  window[globalName] = { version, focus: () => setMinimized(false), close };
+  window[globalName] = { version, mode: hostedConfig?.public ? 'public' : hostedConfig ? 'private' : 'direct', focus: () => setMinimized(false), close };
   on($('.settings-toggle'), 'click', () => setSettings(!state.settingsOpen));
   on($('.toggle'), 'click', () => state.active ? pause() : start());
   on($('.save-settings'), 'click', () => {

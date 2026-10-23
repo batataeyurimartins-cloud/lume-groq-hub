@@ -41,3 +41,13 @@ test('pause aborts the native request and pre-aborted work never uses fetch', as
 test('transport refuses insecure or redirect-capable endpoint configuration', () => {
   for (const value of ['http://lume-test/api/solve','https://lume-test/other','https://lume-test/api/solve?target=x']) assert.throws(()=>createHostedClient({endpoint:value,token}));
 });
+
+test('public bookmark transport needs no token and never sends an old token', async () => {
+  let request;
+  const client = createHostedClient({endpoint,public:true,token:'old-private-code',fetchImpl:async(url,options)=>{request={url,options};return Response.json(answer);}});
+  assert.deepEqual(await client.solve({question}),answer);
+  assert.equal(request.options.headers.Authorization,undefined);
+  assert.ok(!request.options.body.includes('old-private-code'));
+  const anonymous = createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json(answer)});
+  assert.deepEqual(await anonymous.solve({question}),answer);
+});

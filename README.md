@@ -1,85 +1,77 @@
-# Lume · Hub Groq para o console
+# Lume · Favorito automático com Groq
 
-Painel flutuante compacto (286 px), sem lista, prévia ou contagem de questões detectadas. Responde e marca automaticamente, com notificações em cada etapa. Versão **3.0.1**, com instalador e API para Vercel.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê, responde e marca as alternativas, com notificações em cada etapa. Versão **3.1.0**.
 
-## Instalador hospedado
+## Instalar o bookmarklet
 
-Abra o site publicado, informe seu **código de acesso** e clique em **Copiar script**. Cole o conteúdo no console da atividade. O hub já inicia automaticamente com a conexão configurada. O botão de download gera o mesmo script em um arquivo `.js`.
+1. Abra **https://lume-groq-hub.vercel.app**.
+2. Exiba a barra de favoritos com `Ctrl+Shift+B` e arraste **Lume automático** para ela.
+3. Abra a atividade na Sala do Futuro, com a sua sessão já conectada, e clique no favorito. O hub inicia automaticamente na própria página.
 
-O código de acesso identifica o seu hub; ele não é a chave da Groq. A chave fica exclusivamente na variável secreta `GROQ_API_KEY` da Vercel. Não há token real ou chave de API no código do repositório ou no site público. O script gerado para uso pessoal contém o código de acesso e deve permanecer privado.
+O acesso é público: não exige código de acesso ou chave da Groq do visitante. Se o navegador não permitir arrastar o botão, use **Copiar bookmarklet**, crie um favorito e cole o código no campo de endereço desse favorito.
 
-## Publicar pelo GitHub na Vercel
+O bookmarklet é um carregador pequeno de `/bookmarklet.js`, para evitar um endereço de favorito com dezenas de milhares de caracteres. Ele carrega a versão atual do hub, mantém a atividade aberta e evita painéis duplicados. O painel continua oferecendo pausar, minimizar, mover e desfazer a última marcação.
 
-1. Envie este projeto a um repositório GitHub e importe-o na Vercel como **Other**. O arquivo `vercel.json` configura a compilação e a pasta `dist` automaticamente.
-2. Em **Environment Variables**, crie como Secret as variáveis `GROQ_API_KEY` e `HUB_ACCESS_TOKEN` para Production. O código do hub deve ser um valor aleatório base64url de 43 caracteres (32 bytes).
-3. Opcionalmente, configure `GROQ_MODEL` e `ALLOWED_ORIGINS` (lista de origens exatas separadas por vírgulas). A Sala do Futuro é permitida por padrão.
-4. Publique a branch de produção. Os próximos commits seguem o deploy automático da integração GitHub/Vercel.
+## Uso
 
-O endpoint `/api/solve` exige `Authorization: Bearer <código de acesso>`, valida o enunciado e as alternativas e chama a Groq no servidor. Preflight e erros incluem CORS para origens permitidas. Há limite de tamanho, tempo de consulta e um orçamento de 60 chamadas/minuto por instância; este último não é uma cota distribuída de gastos.
-
-O modelo padrão é `openai/gpt-oss-120b`, com a opção `openai/gpt-oss-20b`. A disponibilidade foi consultada na Groq e uma resposta real foi validada durante a configuração. Os modelos anteriores do hub foram substituídos porque já não estavam disponíveis.
-
-É possível abrir o instalador por um link pessoal com fragmento `#token=...`. O fragmento é removido imediatamente e não é enviado ao servidor. Não publique esse link ou o código de acesso.
-
-## Uso direto sem servidor
-
-Esta opção mantém a chave na memória da página, em vez de usar a API hospedada.
-
-1. Entre na Sala do Futuro normalmente e abra a atividade com as questões carregadas.
-2. Abra `dist/hub-groq.js` como texto e copie **todo** o conteúdo.
-3. Abra as ferramentas do navegador (`F12` ou `Ctrl+Shift+J`), entre na aba **Console**, cole o script e pressione Enter.
-4. No hub, abra **Ajustes**, informe sua chave da Groq e mantenha o modelo sugerido ou use outro modelo de texto disponível na sua conta.
-5. Clique em **Salvar e iniciar**. O hub lê as questões carregadas, consulta a Groq e marca as respostas em sequência. Depois, continua aguardando novas questões na página.
-
-A chave da Groq deve ser informada no painel, não no chat. O script não utiliza o RA ou a senha do portal: aproveita a página que você já abriu no navegador.
-
-## Controles
-
-- **Iniciar automático** ativa a leitura, a resposta e a marcação, sem escolher questões ou iniciar cada resposta manualmente. Enquanto ativo, o hub acompanha as mudanças na página e processa novas questões, sem repetir as já concluídas.
 - **Pausar automático** interrompe a consulta em andamento e a busca por novas questões.
-- As notificações mostram **Questão detectada**, **Buscando resposta…**, **Resposta detectada**, **Marcando respostas…** e **Respostas: 1**, **Respostas: 2**, etc. O contador aumenta somente quando a marcação da questão é confirmada, independentemente do número de alternativas.
-- **Desfazer** pausa o automático e restaura a última seleção feita pelo hub quando a questão e a seleção continuam iguais. A contagem diminui se uma marcação confirmada for desfeita.
-- A engrenagem **Ajustes** abre a chave, o modelo e os seletores personalizados.
-- Arraste o cabeçalho para mover o painel. Minimize pelo cabeçalho e use `Alt+Shift+G` para reabrir. Executar o script novamente traz o painel existente para frente.
-- Fechar o painel cancela as solicitações e limpa a chave da memória do hub. Recarregar a página remove o script.
+- **Iniciar automático** retoma a leitura; questões concluídas não são consultadas novamente na mesma sessão.
+- As notificações mostram **Questão detectada**, **Buscando resposta…**, **Resposta detectada**, **Marcando respostas…** e **Respostas: 1**, **Respostas: 2**, etc. O contador aumenta somente após confirmar a marcação da questão.
+- **Desfazer** pausa o automático e restaura a última seleção quando a questão e a seleção continuam iguais.
+- A engrenagem **Ajustes** permite escolher o modelo e indicar seletores personalizados, se necessário.
+- Arraste o cabeçalho para mover o painel. Use minimizar ou `Alt+Shift+G` para mostrar/ocultar. Fechar cancela as solicitações e remove o hub da página.
 
-## Compatibilidade e limites
+O hub acompanha novas questões carregadas enquanto estiver ativo. Não troca páginas nem finaliza a atividade. Sugestões de baixa confiança também são marcadas automaticamente; quando a Groq não indica uma alternativa, a questão é ignorada. A IA pode errar.
 
-O leitor atende grupos de alternativas com controles HTML `radio` e `checkbox`, além de controles acessíveis com `role="radio"` e `role="checkbox"`. Ele verifica se a questão continua igual antes de marcar e confere se o controle realmente ficou selecionado.
+## API pública e dados
 
-O layout da Sala do Futuro pode variar por tipo de atividade. O hub acompanha as questões que forem carregadas na página enquanto estiver ativo; ele não troca páginas nem finaliza a atividade. Controles próprios, questões discursivas, ordenação, arrastar e soltar, canvas e conteúdo de frames de outro domínio precisam de um adaptador específico. Não há OCR: questões que dependem de imagens, áudio ou vídeo podem não ter contexto suficiente para responder. As sugestões da IA podem conter erros, inclusive quando a confiança declarada é alta.
+A chave da Groq fica exclusivamente na variável secreta **GROQ_API_KEY** da Vercel. Não está no GitHub, no site, no favorito ou no script enviado ao navegador. A integração usa `openai/gpt-oss-120b`, com a opção `openai/gpt-oss-20b`.
 
-Todas as sugestões válidas, inclusive as de baixa confiança, são marcadas automaticamente. Quando a Groq não indica nenhuma alternativa, a questão é ignorada e uma notificação avisa. Erros de API pausam o automático; após corrigir a causa, use **Iniciar automático** para tentar novamente. Falhas de marcação não causam tentativas infinitas.
+Com **PUBLIC_HUB=true**, `/api/solve` aceita questões sem token. A origem da Sala do Futuro e os endereços confiáveis da implantação são permitidos por CORS; outras origens são recusadas. As alternativas, o enunciado, os modelos e o tamanho da consulta são validados no servidor.
 
-Se a leitura automática não identificar corretamente uma questão, os **seletores avançados** em Ajustes permitem indicar o bloco repetido de cada questão, o enunciado dentro desse bloco e os controles das alternativas. Exemplo para a demonstração:
+Há limites de **20 consultas por IP/minuto** e **60 consultas totais/minuto por instância**. São controles em memória, com tamanho limitado, e não uma cota global distribuída. Pausar ou fechar o hub impede novas consultas automáticas.
+
+Somente o texto da questão e das alternativas, além do modelo escolhido, é enviado ao servidor e à Groq. O hub não usa o RA ou a senha do portal, nem envia automaticamente cookies ou o restante da página. Não grava credenciais no navegador.
+
+Se `PUBLIC_HUB` não for `true`, o endpoint mantém o modo privado e exige `HUB_ACCESS_TOKEN`. Essa variável não é usada pelo favorito público.
+
+## Compatibilidade
+
+O leitor atende controles HTML `radio` e `checkbox` e controles acessíveis com `role="radio"` ou `role="checkbox"`. Antes de marcar, verifica se o enunciado, as alternativas e os elementos ainda correspondem à questão consultada. Depois, confere se a seleção realmente ocorreu.
+
+Layouts próprios, questões discursivas, ordenação, arrastar e soltar, canvas, Shadow DOM de outros componentes e frames de outro domínio podem exigir adaptadores específicos. Não há OCR: imagens, gráficos, áudio e vídeo não são enviados ao modelo.
+
+Nos seletores personalizados, indique o bloco de cada questão, o enunciado dentro dele e os controles de alternativas. Exemplo da demonstração:
 
 ```text
-Bloco da questão: fieldset.question
+Bloco: fieldset.question
 Enunciado: [data-question-text]
 Alternativas: input[type="radio"], input[type="checkbox"]
 ```
 
-Não use seletores de botões de envio como alternativas. Os seletores devem apontar para os controles de resposta.
+O site da atividade precisa permitir o carregamento HTTPS de `/bookmarklet.js` e chamadas à API da Vercel. A política da página pública da Sala do Futuro foi verificada e permite essas conexões; a atividade autenticada específica ainda não foi validada. Caso o navegador ou o site bloqueie o favorito, o instalador oferece **Usar pelo console** como alternativa. A política do site também pode bloquear as consultas da API.
 
-O navegador precisa permitir chamadas HTTPS para `api.groq.com`. Erros de rede podem ser causados por conexão, CORS ou pela política de conteúdo do portal. Limites de uso, modelos indisponíveis e chaves inválidas são apresentados no painel.
+## Publicação pelo GitHub
 
-## Dados
+O repositório está conectado à Vercel. Commits na branch `main` geram a implantação de produção. `vercel.json` configura a compilação e a saída estática em `dist`, junto da função Node.js em `api/solve.js`.
 
-A chave é mantida somente em memória; não é gravada em cookies, localStorage ou no arquivo. Como qualquer script colado no console, ele executa no contexto da página. A chave não fica protegida de outros scripts que já estejam executando nessa página. Prefira uma chave dedicada e com limite de gastos.
+Variáveis de produção:
 
-Enquanto o automático estiver ativo, o hub envia diretamente à Groq o texto das novas questões e das alternativas detectadas, além do modelo escolhido. Não envia automaticamente o restante da página, cookies, RA ou senha do portal. Não existe servidor intermediário neste projeto.
-
-## Demonstração e desenvolvimento
-
-Abra `dist/demo.html` no navegador para testar o painel com duas questões de exemplo. O modo direto da demonstração precisa da sua chave para responder. O instalador fica em `dist/index.html` e deve ser servido via HTTPS.
-
-```sh
-node scripts/build.mjs
-node --test test/*.test.mjs
+```text
+GROQ_API_KEY       Secret: chave da Groq
+PUBLIC_HUB        Config: true
+GROQ_MODEL        Config: openai/gpt-oss-120b
+ALLOWED_ORIGINS    Opcional: origens exatas separadas por vírgulas
 ```
 
-Os testes de navegador são executados com `npm run test:browser`, usando Playwright e Chromium. No Linux, o caminho padrão é `/usr/bin/chromium`; os testes de integração aceitam `CHROMIUM_PATH`. Os testes interceptam as chamadas à Groq com respostas simuladas, sem chave real e sem envio à plataforma escolar.
+## Desenvolvimento
 
-Verificação na Sala do Futuro: a página pública e o formulário de login foram acessados, mas o portal retornou um erro de conexão na tentativa de autenticação. A leitura das questões dessa atividade específica ainda precisa ser conferida na sua sessão. Nenhuma alteração foi feita na atividade escolar durante essa verificação.
+```sh
+npm run build
+npm test
+npm run test:browser
+```
 
-`src/page-adapter.js` faz leitura, verificação e seleção. `src/groq-client.js` faz a chamada à Groq e valida a resposta. `src/hub.js` contém a interface e a coordenação. O build junta os três em um único arquivo para colar no console.
+Os testes de navegador usam Playwright e Chromium. `CHROMIUM_PATH` substitui o caminho padrão `/usr/bin/chromium`. As chamadas de IA são simuladas nesses testes. `dist/demo.html` contém questões para testar o hub; o instalador público fica em `dist/index.html`.
+
+`src/page-adapter.js` faz a leitura e seleção. `src/groq-client.js` consulta a Groq no servidor. `src/hosted-client.js` conecta o hub à API. `src/hub.js` contém o painel. O build gera os arquivos do console e o script carregado pelo favorito.

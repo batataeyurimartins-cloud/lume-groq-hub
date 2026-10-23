@@ -6,14 +6,14 @@ const { chromium } = require('playwright');
 
 let browser;
 const site = path.join(__dirname, '../site');
-const fakeToken = 'A'.repeat(43);
 const rawBundle = '/* Public hub bundle */\n(() => { window.__LUME_GROQ_HUB__ = { version: "test" }; })();';
+const loaderBundle = 'window.installerTest.loaded++;window.__LUME_GROQ_HUB__={mode:"public",focus:function(){window.installerTest.focused++;}};';
 before(async () => {
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
 });
 after(async () => { await browser?.close(); });
 
-async function setup({ fragment = '', clipboardFails = false, bundleStatus = 200 } = {}) {
+async function setup({ fragment = '', clipboardFails = false, bundleStatus = 200, loaderStatus = 200, loaderDelay = 0 } = {}) {
   const page = await browser.newPage({ acceptDownloads: true, viewport: { width: 1200, height: 880 } });
   page.setDefaultTimeout(4000);
   const requests = [];
@@ -25,12 +25,17 @@ async function setup({ fragment = '', clipboardFails = false, bundleStatus = 200
       await route.fulfill({ status: bundleStatus, contentType: 'text/javascript', body: rawBundle });
       return;
     }
+    if (pathname === '/bookmarklet.js') {
+      if (loaderDelay) await new Promise(resolve => setTimeout(resolve, loaderDelay));
+      await route.fulfill({ status: loaderStatus, contentType: 'text/javascript', body: loaderBundle });
+      return;
+    }
     const filename = { '/': 'index.html', '/install.js': 'install.js', '/style.css': 'style.css' }[pathname];
     if (!filename) { await route.fulfill({ status: 404, body: '' }); return; }
     await route.fulfill({ contentType: filename.endsWith('.css') ? 'text/css' : filename.endsWith('.js') ? 'text/javascript' : 'text/html', body: await readFile(path.join(site, filename), 'utf8') });
   });
   await page.addInitScript(({ clipboardFails }) => {
-    window.installerTest = { copied: '', storageWrites: 0 };
+    window.installerTest = { copied: '', storageWrites: 0, loaded: 0, focused: 0 };
     const original = Storage.prototype.setItem;
     Storage.prototype.setItem = function (...args) { window.installerTest.storageWrites++; return original.apply(this, args); };
     Object.defineProperty(navigator, 'clipboard', {
@@ -42,84 +47,123 @@ async function setup({ fragment = '', clipboardFails = false, bundleStatus = 200
     });
   }, { clipboardFails });
   await page.goto(`https://installer.test/${fragment}`);
-  await page.locator('#access-token').waitFor();
+  await page.locator('#bookmarklet-link').waitFor();
   return { page, requests };
 }
 
-test('installer consumes the fragment without storage and copies same-origin backend configuration', async () => {
-  const { page, requests } = await setup({ fragment: `#token=${fakeToken}` });
+async function bookmarkletCode(page) {
+  const value = await page.locator('#bookmarklet-link').getAttribute('href');
+  assert.ok(value.startsWith('javascript:'));
+  return value.slice('javascript:'.length);
+}
+
+test('public installer needs no access fields, discards legacy token and offers a one-line draggable bookmarklet', async () => {
+  const { page, requests } = await setup({ fragment: '#token=legacy-private-code' });
   try {
     assert.equal(new URL(page.url()).hash, '');
-    assert.equal(await page.locator('#access-token').inputValue(), fakeToken);
-    assert.equal(await page.locator('#access-token').getAttribute('type'), 'password');
-    await page.getByRole('button', { name: 'Copiar script', exact: true }).click();
-    await page.waitForFunction(() => window.installerTest.copied.length > 0);
+    assert.equal(await page.locator('input[type="password"], #access-token, #lume-api-key').count(), 0);
+    const link = page.locator('#bookmarklet-link');
+    assert.equal(await link.getAttribute('draggable'), 'true');
+    const code = await bookmarkletCode(page);
+    assert.ok(code.includes('https://installer.test/bookmarklet.js'));
+    assert.ok(code.includes('lume-bookmarklet-loader') && code.includes('30000'));
+    assert.ok(!/\r|\n|eval\s*\(|new\s+Function/.test(code));
+    assert.ok(!code.includes('legacy-private-code'));
+    await page.getByRole('button', { name: 'Copiar bookmarklet', exact: true }).click();
+    await page.waitForFunction(() => window.installerTest.copied.startsWith('javascript:'));
+    assert.equal(await page.evaluate(() => window.installerTest.copied), `javascript:${code}`);
+    assert.equal(await page.evaluate(() => window.installerTest.storageWrites), 0);
+    assert.equal(requests.filter(request => ['/hub-groq.js', '/api/solve'].includes(request.pathname)).length, 0);
+  } finally { await page.close(); }
+});
+
+test('bookmarklet injects only one pending loader, cleans it and focuses an existing public hub', async () => {
+  const { page, requests } = await setup({ loaderDelay: 180 });
+  try {
+    const code = await bookmarkletCode(page);
+    await page.evaluate(`(() => { ${code}; ${code}; })()`);
+    assert.equal(await page.locator('#lume-bookmarklet-loader').count(), 1);
+    await page.waitForFunction(() => window.installerTest.loaded === 1);
+    assert.equal(await page.locator('#lume-bookmarklet-loader').count(), 0);
+    await page.evaluate(code);
+    assert.equal(await page.evaluate(() => window.installerTest.focused), 1);
+    assert.equal(requests.filter(request => request.pathname === '/bookmarklet.js').length, 1);
+  } finally { await page.close(); }
+});
+
+test('bookmarklet loads the public version when a stale private hub exists', async () => {
+  const { page, requests } = await setup();
+  try {
+    const code = await bookmarkletCode(page);
+    await page.evaluate(() => { window.__LUME_GROQ_HUB__ = { mode: 'private', focus: () => window.installerTest.focused++ }; });
+    await page.evaluate(code);
+    await page.waitForFunction(() => window.installerTest.loaded === 1);
+    assert.equal(await page.evaluate(() => window.installerTest.focused), 0);
+    assert.equal(requests.filter(request => request.pathname === '/bookmarklet.js').length, 1);
+  } finally { await page.close(); }
+});
+
+test('blocked loader is removed and reports the console fallback without opening a new tab', async () => {
+  const { page } = await setup({ loaderStatus: 503 });
+  try {
+    const code = await bookmarkletCode(page);
+    const dialogPromise = page.waitForEvent('dialog');
+    await page.evaluate(code);
+    const dialog = await dialogPromise;
+    assert.ok(dialog.message().includes('O site bloqueou o Lume') && dialog.message().includes('Usar pelo console'));
+    await dialog.accept();
+    assert.equal(await page.locator('#lume-bookmarklet-loader').count(), 0);
+    assert.equal(page.context().pages().length, 1);
+  } finally { await page.close(); }
+});
+
+test('console fallback copies public backend configuration with a fresh bundle and no token', async () => {
+  const { page, requests } = await setup();
+  try {
+    await page.getByText('Usar pelo console', { exact: true }).click();
+    await page.getByRole('button', { name: 'Copiar script para o console', exact: true }).click();
+    await page.waitForFunction(() => window.installerTest.copied.includes('__LUME_HOSTED_CONFIG__'));
     const copied = await page.evaluate(() => window.installerTest.copied);
     const config = JSON.parse(copied.match(/window\.__LUME_HOSTED_CONFIG__ = (.+);/)[1]);
-    assert.deepEqual(config, { endpoint: 'https://installer.test/api/solve', token: fakeToken });
+    assert.deepEqual(config, { endpoint: 'https://installer.test/api/solve', public: true });
     assert.ok(copied.includes(rawBundle));
-    assert.equal(await page.evaluate(() => window.installerTest.storageWrites), 0);
-    assert.ok(requests.every(request => !request.url.includes(fakeToken) && request.pathname !== '/api/solve'));
-    assert.equal(requests.filter(request => request.pathname === '/hub-groq.js').length, 1);
+    assert.ok(!Object.hasOwn(config, 'token'));
     assert.equal(requests.find(request => request.pathname === '/hub-groq.js').headers['cache-control'], 'no-cache');
-    await page.locator('#access-token').fill('B'.repeat(43));
-    await page.getByRole('button', { name: 'Copiar script', exact: true }).click();
-    await page.waitForFunction(() => window.installerTest.copied.includes('B'.repeat(43)));
-    assert.equal(requests.filter(request => request.pathname === '/hub-groq.js').length, 2);
+    assert.equal(requests.filter(request => request.pathname === '/api/solve').length, 0);
+    assert.equal(await page.evaluate(() => window.installerTest.storageWrites), 0);
   } finally { await page.close(); }
 });
 
-test('installer validates access codes before fetching and removes an invalid token fragment', async () => {
-  const { page, requests } = await setup({ fragment: '#token=invalid' });
-  try {
-    assert.equal(new URL(page.url()).hash, '');
-    assert.equal(await page.locator('#access-token').inputValue(), '');
-    await page.locator('#access-token').fill('too-short');
-    await page.getByRole('button', { name: 'Copiar script', exact: true }).click();
-    await page.getByText('Informe um código de acesso válido para preparar seu hub.', { exact: true }).waitFor();
-    assert.equal(requests.filter(request => request.pathname === '/hub-groq.js').length, 0);
-  } finally { await page.close(); }
-});
-
-test('clipboard denial reveals and selects the generated script for manual copying', async () => {
+test('clipboard denial exposes selected bookmarklet and console code for manual copying', async () => {
   const { page } = await setup({ clipboardFails: true });
   try {
-    await page.locator('#access-token').fill(fakeToken);
-    await page.getByRole('button', { name: 'Copiar script', exact: true }).click();
-    const textarea = page.getByRole('textbox', { name: 'Script gerado para copiar', exact: true });
+    await page.getByRole('button', { name: 'Copiar bookmarklet', exact: true }).click();
+    const textarea = page.locator('#generated-script');
     await textarea.waitFor();
-    const code = await textarea.inputValue();
-    assert.ok(code.includes(rawBundle) && code.includes(fakeToken));
+    let code = await textarea.inputValue();
+    assert.ok(code.startsWith('javascript:'));
     assert.equal(await textarea.evaluate(element => element.selectionEnd - element.selectionStart), code.length);
-    await page.locator('#access-token').fill('C'.repeat(43));
-    assert.equal(await textarea.isVisible(), false);
-    assert.equal(await page.locator('#generated-script').inputValue(), '');
+    await page.getByText('Usar pelo console', { exact: true }).click();
+    await page.getByRole('button', { name: 'Copiar script para o console', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('#generated-script').value.includes('__LUME_HOSTED_CONFIG__'));
+    code = await textarea.inputValue();
+    assert.ok(code.includes(rawBundle) && code.includes('"public":true'));
+    assert.equal(await textarea.evaluate(element => element.selectionEnd - element.selectionStart), code.length);
   } finally { await page.close(); }
 });
 
-test('download contains the configured bundle and mobile layout has no horizontal overflow', async () => {
-  const { page } = await setup({ fragment: `#token=${fakeToken}` });
+test('downloaded Netscape bookmarks file contains the real bookmarklet and mobile layout fits', async () => {
+  const { page } = await setup();
   try {
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: /Baixar arquivo/ }).click();
+    await page.getByRole('button', { name: 'Baixar favorito', exact: true }).click();
     const download = await downloadPromise;
-    assert.equal(download.suggestedFilename(), 'lume-hub.js');
+    assert.equal(download.suggestedFilename(), 'lume-favorito.html');
     const content = await readFile(await download.path(), 'utf8');
-    assert.ok(content.includes(fakeToken) && content.includes(rawBundle));
+    assert.ok(content.includes('NETSCAPE-Bookmark-file-1') && content.includes('HREF="javascript:'));
+    assert.ok(content.includes('https://installer.test/bookmarklet.js'));
     await page.setViewportSize({ width: 360, height: 780 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-    await page.getByRole('button', { name: 'Mostrar código de acesso', exact: true }).click();
-    assert.equal(await page.locator('#access-token').getAttribute('type'), 'text');
-    await page.getByRole('button', { name: 'Ocultar código de acesso', exact: true }).click();
-    assert.equal(await page.locator('#access-token').getAttribute('type'), 'password');
-  } finally { await page.close(); }
-});
-
-test('bundle loading failure reports an error without copying any partial script', async () => {
-  const { page } = await setup({ fragment: `#token=${fakeToken}`, bundleStatus: 503 });
-  try {
-    await page.getByRole('button', { name: 'Copiar script', exact: true }).click();
-    await page.getByText('Não foi possível carregar o hub. Tente novamente em instantes.', { exact: true }).waitFor();
-    assert.equal(await page.evaluate(() => window.installerTest.copied), '');
+    assert.equal(await page.locator('#bookmarklet-link').isVisible(), true);
   } finally { await page.close(); }
 });

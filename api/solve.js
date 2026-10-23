@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import { createGroqClient } from '../src/groq-client.js';
 
 const MAX_BODY_BYTES = 48 * 1024;
@@ -48,6 +49,53 @@ function authenticated(req, expected) {
   const actualDigest = createHash('sha256').update(match[1]).digest();
   const expectedDigest = createHash('sha256').update(expected).digest();
   return timingSafeEqual(actualDigest, expectedDigest);
+}
+
+function requesterIp(req) {
+  const normalize = value => {
+    if (typeof value !== 'string' || value.length > 256) return '';
+    const candidate = value.split(',')[0].trim().toLowerCase();
+    if (!/^[0-9a-f:.]{1,45}$/.test(candidate) || !isIP(candidate)) return '';
+    return candidate.startsWith('::ffff:') && isIP(candidate.slice(7)) === 4 ? candidate.slice(7) : candidate;
+  };
+  // Vercel overwrites its dedicated forwarding header. Never store arbitrary
+  // header text; local/other runtimes fall back to forwarded-for or the socket.
+  const vercelIp = header(req, 'x-vercel-forwarded-for');
+  return normalize(vercelIp || header(req, 'x-forwarded-for'))
+    || normalize(req.socket?.remoteAddress) || 'unknown';
+}
+
+export function createRequestLimiter({ now = Date.now, maxBuckets = 256 } = {}) {
+  const capacity = Number.isInteger(maxBuckets) && maxBuckets > 0 ? Math.min(maxBuckets, 256) : 256;
+  const buckets = new Map();
+  let windowStart = now();
+  let windowCount = 0;
+  const remaining = (start, current) => Math.max(1, Math.ceil((60000 - (current - start)) / 1000));
+  return {
+    // Best effort only: memory, counts and IP buckets are local to one warm
+    // function instance and reset on cold starts. They are not a global quota.
+    consume(ip) {
+      const current = now();
+      if (current - windowStart >= 60000 || current < windowStart) { windowStart = current; windowCount = 0; }
+      for (const [key, bucket] of buckets) {
+        if (current - bucket.start >= 60000 || current < bucket.start) buckets.delete(key);
+      }
+      if (windowCount >= 60) return { allowed: false, retryAfter: remaining(windowStart, current) };
+      let bucket = buckets.get(ip);
+      if (!bucket) {
+        // Refuse extra identities instead of evicting active budgets, which
+        // would allow rotating identities to reset another visitor's budget.
+        if (buckets.size >= capacity) return { allowed: false, retryAfter: 60 };
+        bucket = { start: current, count: 0 };
+        buckets.set(ip, bucket);
+      }
+      if (bucket.count >= 20) return { allowed: false, retryAfter: remaining(bucket.start, current) };
+      bucket.count++;
+      windowCount++;
+      return { allowed: true };
+    },
+    get size() { return buckets.size; },
+  };
 }
 
 async function readBody(req) {
@@ -143,9 +191,7 @@ function publicFailure(error) {
 }
 
 export function createSolveHandler({ env = process.env, client = createGroqClient(), now = Date.now } = {}) {
-  // A small per-instance budget. It is intentionally not a distributed quota.
-  let windowStart = now();
-  let windowCount = 0;
+  const limiter = createRequestLimiter({ now });
 
   return async function solveHandler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
@@ -184,22 +230,21 @@ export function createSolveHandler({ env = process.env, client = createGroqClien
       res.setHeader('Allow', 'POST, OPTIONS');
       return reject(405, 'METHOD', 'Use POST para enviar uma questão.');
     }
-    if (typeof env.HUB_ACCESS_TOKEN !== 'string' || !env.HUB_ACCESS_TOKEN
-        || typeof env.GROQ_API_KEY !== 'string' || !env.GROQ_API_KEY.trim()) {
+    const publicHub = env.PUBLIC_HUB === 'true';
+    if (typeof env.GROQ_API_KEY !== 'string' || !env.GROQ_API_KEY.trim()
+        || (!publicHub && (typeof env.HUB_ACCESS_TOKEN !== 'string' || !env.HUB_ACCESS_TOKEN))) {
       return reject(503, 'CONFIG', 'O serviço ainda não está configurado.');
     }
-    if (!authenticated(req, env.HUB_ACCESS_TOKEN)) return reject(401, 'UNAUTHORIZED', 'Código de acesso inválido ou ausente.');
+    if (!publicHub && !authenticated(req, env.HUB_ACCESS_TOKEN)) return reject(401, 'UNAUTHORIZED', 'Acesso não autorizado.');
     const contentType = header(req, 'content-type');
     if (!/^application\/json(?:\s*;\s*charset\s*=\s*["']?utf-8["']?)?\s*$/i.test(contentType)) {
       return reject(415, 'INPUT', 'Envie o corpo com Content-Type: application/json.');
     }
-    const currentTime = now();
-    if (currentTime - windowStart >= 60000 || currentTime < windowStart) { windowStart = currentTime; windowCount = 0; }
-    if (windowCount >= 60) {
-      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((60000 - (currentTime - windowStart)) / 1000))));
+    const budget = limiter.consume(requesterIp(req));
+    if (!budget.allowed) {
+      res.setHeader('Retry-After', String(budget.retryAfter));
       return reject(429, 'RATE_LIMIT', 'Limite de consultas atingido. Aguarde um minuto e tente novamente.');
     }
-    windowCount++;
     const controller = new AbortController();
     const onAborted = () => controller.abort();
     const onClosed = () => { if (!res.writableEnded) controller.abort(); };

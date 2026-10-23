@@ -1,5 +1,5 @@
-// The browser holds an app access code; the Groq key remains on the server.
-export function createHostedClient({ endpoint, token, fetchImpl = globalThis.fetch, timeoutMs = 45000 } = {}) {
+// Public bookmarks never contain credentials; the Groq key stays on the server.
+export function createHostedClient({ endpoint, token, public: publicAccess = false, fetchImpl = globalThis.fetch, timeoutMs = 45000 } = {}) {
   let url;
   try { url = new URL(endpoint); } catch { throw new Error('Endereço do servidor inválido. Copie o script novamente no instalador.'); }
   if (url.protocol !== 'https:' || url.pathname !== '/api/solve' || url.username || url.password || url.search || url.hash) {
@@ -19,7 +19,7 @@ export function createHostedClient({ endpoint, token, fetchImpl = globalThis.fet
   };
   async function solve({ question, model = 'openai/gpt-oss-120b', signal } = {}) {
     if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
-    if (!token || !question || typeof question.prompt !== 'string' || !Array.isArray(question.options)) throw failure('INPUT', messages.INPUT);
+    if ((!publicAccess && !token) || !question || typeof question.prompt !== 'string' || !Array.isArray(question.options)) throw failure('INPUT', messages.INPUT);
     const data = { question: { prompt: question.prompt, multiple: question.multiple === true, options: question.options.map(option => ({ text: option.text })) }, model };
     const controller = new AbortController();
     let timedOut = false;
@@ -28,7 +28,7 @@ export function createHostedClient({ endpoint, token, fetchImpl = globalThis.fet
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
     try {
       const response = await fetchImpl(url.href, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(!publicAccess ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(data), signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error',
       });
       let answer;
