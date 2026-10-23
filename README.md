@@ -17,6 +17,8 @@ O código de acesso identifica o seu hub; ele não é a chave da Groq. A chave f
 
 O endpoint `/api/solve` exige `Authorization: Bearer <código de acesso>`, valida o enunciado e as alternativas e chama a Groq no servidor. Preflight e erros incluem CORS para origens permitidas. Há limite de tamanho, tempo de consulta e um orçamento de 60 chamadas/minuto por instância; este último não é uma cota distribuída de gastos.
 
+O modelo padrão é `openai/gpt-oss-120b`, com a opção `openai/gpt-oss-20b`. A disponibilidade foi consultada na Groq e uma resposta real foi validada durante a configuração. Os modelos anteriores do hub foram substituídos porque já não estavam disponíveis.
+
 É possível abrir o instalador por um link pessoal com fragmento `#token=...`. O fragmento é removido imediatamente e não é enviado ao servidor. Não publique esse link ou o código de acesso.
 
 ## Uso direto sem servidor
