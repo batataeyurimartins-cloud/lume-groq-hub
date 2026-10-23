@@ -5,6 +5,10 @@ import { createGroqClient } from '../src/groq-client.js';
 const MAX_BODY_BYTES = 48 * 1024;
 const MODELS = new Set(['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
 const DEFAULT_ORIGIN = 'https://saladofuturo.educacao.sp.gov.br';
+// Sala's Application Insights fetch wrapper can add distributed-tracing
+// headers. Accept those names without granting access to additional origins.
+const CORS_HEADERS = ['Authorization', 'Content-Type', 'Request-Id', 'Request-Context', 'Traceparent', 'Tracestate', 'Baggage'];
+const CORS_HEADER_NAMES = new Set(CORS_HEADERS.map(name => name.toLowerCase()));
 const LOCAL_ERROR = Symbol('localApiError');
 
 function header(req, name) {
@@ -187,7 +191,9 @@ function publicFailure(error) {
     ABORTED: [408, 'Consulta cancelada.'],
   };
   const [status, message] = known[error?.code] || [502, 'Não foi possível consultar a Groq. Tente novamente.'];
-  return { status, code: known[error?.code] ? error.code : 'API', message };
+  const retryAfter = error?.code === 'RATE_LIMIT' && Number.isFinite(error.retryAfter) && error.retryAfter > 0
+    ? Math.min(86400, Math.ceil(error.retryAfter)) : undefined;
+  return { status, code: known[error?.code] ? error.code : 'API', message, retryAfter };
 }
 
 export function createSolveHandler({ env = process.env, client = createGroqClient(), now = Date.now } = {}) {
@@ -213,14 +219,15 @@ export function createSolveHandler({ env = process.env, client = createGroqClien
     if (allowed) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      res.setHeader('Access-Control-Allow-Headers', CORS_HEADERS.join(', '));
+      res.setHeader('Access-Control-Expose-Headers', 'Retry-After');
     }
     const method = String(req.method || '').toUpperCase();
     if (method === 'OPTIONS') {
       if (!allowed) return reject(403, 'ORIGIN', 'Uma origem autorizada é necessária para esta solicitação.');
       const requestedMethod = header(req, 'access-control-request-method');
       const requestedHeaders = header(req, 'access-control-request-headers').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
-      if ((requestedMethod && requestedMethod.toUpperCase() !== 'POST') || requestedHeaders.some(value => !['authorization', 'content-type'].includes(value))) {
+      if ((requestedMethod && requestedMethod.toUpperCase() !== 'POST') || requestedHeaders.some(value => !CORS_HEADER_NAMES.has(value))) {
         return reject(403, 'ORIGIN', 'Esta solicitação de acesso não é permitida.');
       }
       res.setHeader('Access-Control-Max-Age', '600');
@@ -257,6 +264,7 @@ export function createSolveHandler({ env = process.env, client = createGroqClien
       return send(200, { indices: answer.indices, explanation: answer.explanation, confidence: answer.confidence });
     } catch (error) {
       const safe = publicFailure(error);
+      if (safe.retryAfter) res.setHeader('Retry-After', String(safe.retryAfter));
       return reject(safe.status, safe.code, safe.message);
     } finally {
       req.removeListener?.('aborted', onAborted);

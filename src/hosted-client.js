@@ -36,6 +36,15 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
       if (controller.signal.aborted) throw failure('ABORTED', 'Consulta cancelada.');
       if (!response.ok) {
         const code = answer?.error?.code;
+        if (response.status === 429 && code === 'RATE_LIMIT') {
+          const rawDelay = response.headers?.get?.('retry-after') || '';
+          const seconds = /^\d+$/.test(rawDelay) ? Number(rawDelay) : NaN;
+          const delay = Number.isFinite(seconds) && seconds > 0 ? Math.min(86400, seconds) : undefined;
+          const error = failure('RATE_LIMIT', delay
+            ? `Limite de consultas atingido. Aguarde ${delay} s e inicie novamente.` : messages.RATE_LIMIT);
+          if (delay) error.retryAfter = delay;
+          throw error;
+        }
         if (response.status === 401 && code === 'AUTH') throw failure('CONFIG', 'O servidor não conseguiu autenticar na Groq. Confira a configuração da integração.');
         if (response.status === 401) throw failure('AUTH', messages.AUTH);
         const knownCode = Object.hasOwn(messages, code);

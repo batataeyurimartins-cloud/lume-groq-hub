@@ -4,7 +4,7 @@
 const source = document.currentScript?.src;
 if (!source) throw new Error('Abra o Lume pelo favorito instalado no site.');
 window.__LUME_HOSTED_CONFIG__ = { endpoint: new URL('/api/solve', source).href, public: true };
-/* Lume · Hub Groq v3.1.1 | Hub compacto com respostas e marcação automática. */
+/* Lume · Hub Groq v3.1.2 | Hub compacto com respostas e marcação automática. */
 (() => {
 'use strict';
 
@@ -323,6 +323,7 @@ function createGroqClient({
   fetchImpl = globalThis.fetch,
   timeoutMs = 35000,
   retryDelayMs = 800,
+  now = Date.now,
 } = {}) {
   const endpoint = 'https://api.groq.com/openai/v1/chat/completions';
   const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(timeoutMs, 120000) : 35000;
@@ -378,13 +379,21 @@ function createGroqClient({
   }
 
   function retryAfter(response) {
-    const value = response.headers?.get?.('retry-after');
-    if (value) {
-      const seconds = Number(value);
-      const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - Date.now();
-      if (Number.isFinite(delay)) return Math.min(8000, Math.max(0, delay));
+    const raw = response.headers?.get?.('retry-after');
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    let delay;
+    if (value && value.length <= 128) {
+      if (/^\d+(?:\.\d+)?$/.test(value)) delay = Number(value) * 1000;
+      else if (/^[A-Za-z]{3},\s+\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT$/i.test(value)) {
+        delay = Date.parse(value) - now();
+      }
+      if (Number.isFinite(delay)) {
+        const delayMs = Math.min(86400000, Math.max(0, delay));
+        return { delayMs, seconds: Math.ceil(delayMs / 1000) };
+      }
     }
-    return Math.max(0, Math.min(8000, retryDelayMs));
+    const fallback = Number.isFinite(retryDelayMs) ? retryDelayMs : 800;
+    return { delayMs: Math.max(0, Math.min(8000, fallback)), seconds: undefined };
   }
 
   async function solve({ apiKey, model = 'openai/gpt-oss-120b', question, signal } = {}) {
@@ -434,9 +443,19 @@ function createGroqClient({
       if (response.status === 404 || /model_(not_found|decommissioned|permission)/i.test(code)) {
         return failure('MODEL', 'Modelo indisponível. Escolha nas configurações um modelo ativo na sua conta Groq.');
       }
-      if (response.status === 429) return failure('RATE_LIMIT', 'Limite da Groq atingido. Aguarde um pouco e tente novamente.');
+      if (response.status === 429) {
+        const error = failure('RATE_LIMIT', 'Limite da Groq atingido. Aguarde um pouco e tente novamente.');
+        const delay = retryAfter(response);
+        if (delay.seconds !== undefined) error.retryAfter = delay.seconds;
+        return error;
+      }
       if (response.status === 413) return failure('INPUT', 'A Groq recusou o tamanho da questão. Reduza o texto capturado.');
-      if (response.status >= 500) return failure('API', 'A Groq está temporariamente indisponível. Tente novamente em instantes.');
+      if (response.status >= 500) {
+        const error = failure('API', 'A Groq está temporariamente indisponível. Tente novamente em instantes.');
+        const delay = retryAfter(response);
+        if (delay.seconds !== undefined) error.retryAfter = delay.seconds;
+        return error;
+      }
       return failure('API', `A Groq recusou a consulta (HTTP ${response.status}). Confira o modelo e tente novamente.`);
     }
 
@@ -468,12 +487,13 @@ function createGroqClient({
           referrerPolicy: 'no-referrer',
         }));
         if (response.ok) break;
-        if (attempt === 0 && [429, 502, 503].includes(response.status)) {
+        const retry = retryAfter(response);
+        if (attempt === 0 && [429, 502, 503].includes(response.status) && retry.delayMs <= 8000) {
           // Release a discarded response body before the one allowed retry.
           try { await interruptible(response.body?.cancel?.()); } catch (error) {
             if (controller.signal.aborted) throw abortError();
           }
-          await pause(retryAfter(response));
+          await pause(retry.delayMs);
           continue;
         }
         throw await apiFailure(response);
@@ -545,6 +565,15 @@ function createHostedClient({ endpoint, token, public: publicAccess = false, fet
       if (controller.signal.aborted) throw failure('ABORTED', 'Consulta cancelada.');
       if (!response.ok) {
         const code = answer?.error?.code;
+        if (response.status === 429 && code === 'RATE_LIMIT') {
+          const rawDelay = response.headers?.get?.('retry-after') || '';
+          const seconds = /^\d+$/.test(rawDelay) ? Number(rawDelay) : NaN;
+          const delay = Number.isFinite(seconds) && seconds > 0 ? Math.min(86400, seconds) : undefined;
+          const error = failure('RATE_LIMIT', delay
+            ? `Limite de consultas atingido. Aguarde ${delay} s e inicie novamente.` : messages.RATE_LIMIT);
+          if (delay) error.retryAfter = delay;
+          throw error;
+        }
         if (response.status === 401 && code === 'AUTH') throw failure('CONFIG', 'O servidor não conseguiu autenticar na Groq. Confira a configuração da integração.');
         if (response.status === 401) throw failure('AUTH', messages.AUTH);
         const knownCode = Object.hasOwn(messages, code);
@@ -570,7 +599,7 @@ function createHostedClient({ endpoint, token, public: publicAccess = false, fet
 // hub.js
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.1.1';
+  const version = '3.1.2';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')

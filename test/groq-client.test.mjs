@@ -67,6 +67,75 @@ test('retries rate limiting once and respects Retry-After', async () => {
   assert.equal(calls, 2);
 });
 
+test('long provider cooldown returns RATE_LIMIT immediately instead of retrying after eight seconds', async () => {
+  let calls = 0;
+  const client = createGroqClient({ timeoutMs: 30, fetchImpl: async () => {
+    calls++;
+    return new Response('{}', { status: 429, headers: { 'Retry-After': '75.2' } });
+  } });
+  await assert.rejects(client.solve(input()), error => error.code === 'RATE_LIMIT' && error.retryAfter === 76);
+  assert.equal(calls, 1);
+});
+
+test('HTTP-date Retry-After is preserved as seconds and very long waits are capped at one day', async () => {
+  const current = Date.UTC(2026, 9, 23, 12, 0, 0);
+  for (const [value, expected] of [
+    [new Date(current + 75000).toUTCString(), 75],
+    [new Date(current + 3 * 86400000).toUTCString(), 86400],
+    ['999999999', 86400],
+  ]) {
+    let calls = 0;
+    const client = createGroqClient({ now: () => current, timeoutMs: 30, fetchImpl: async () => {
+      calls++;
+      return new Response('{}', { status: 429, headers: { 'Retry-After': value } });
+    } });
+    await assert.rejects(client.solve(input()), error => error.code === 'RATE_LIMIT' && error.retryAfter === expected);
+    assert.equal(calls, 1);
+  }
+});
+
+test('invalid or absent cooldown headers use the bounded retry fallback without invented metadata', async () => {
+  for (const value of [undefined, '', 'not-a-date', '-3', 'Infinity', '0x10', '123garbage']) {
+    let calls = 0;
+    const client = createGroqClient({ retryDelayMs: 0, fetchImpl: async () => {
+      calls++;
+      return new Response('{}', { status: 429, headers: value === undefined ? {} : { 'Retry-After': value } });
+    } });
+    await assert.rejects(client.solve(input()), error => error.code === 'RATE_LIMIT' && error.retryAfter === undefined);
+    assert.equal(calls, 2);
+  }
+});
+
+test('short and expired cooldowns retain one retry and final valid metadata', async () => {
+  const current = Date.UTC(2026, 9, 23, 12, 0, 0);
+  for (const [value, expected] of [['0.005', 1], [new Date(current - 10000).toUTCString(), 0]]) {
+    let calls = 0;
+    const client = createGroqClient({ now: () => current, fetchImpl: async () => {
+      calls++;
+      return new Response('{}', { status: 429, headers: { 'Retry-After': value } });
+    } });
+    await assert.rejects(client.solve(input()), error => error.code === 'RATE_LIMIT' && error.retryAfter === expected);
+    assert.equal(calls, 2);
+  }
+});
+
+test('temporary server errors retry once only when their cooldown fits the bounded wait', async () => {
+  for (const status of [502, 503]) {
+    let calls = 0;
+    const short = createGroqClient({ retryDelayMs: 0, fetchImpl: async () => ++calls === 1
+      ? new Response('{}', { status, headers: { 'Retry-After': '0' } }) : ok() });
+    assert.deepEqual(await short.solve(input()), answer);
+    assert.equal(calls, 2);
+    calls = 0;
+    const long = createGroqClient({ timeoutMs: 30, fetchImpl: async () => {
+      calls++;
+      return new Response('{}', { status, headers: { 'Retry-After': '45' } });
+    } });
+    await assert.rejects(long.solve(input()), error => error.code === 'API' && error.retryAfter === 45);
+    assert.equal(calls, 1);
+  }
+});
+
 test('retry is bounded and API errors never include provider data or the key', async () => {
   let calls = 0;
   const client = createGroqClient({ retryDelayMs: 0, fetchImpl: async () => { calls++; return new Response('{"error":"gsk_test_only secret"}', { status: 429 }); } });

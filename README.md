@@ -1,6 +1,6 @@
 # Lume · Favorito automático com Groq
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê, responde e marca as alternativas, com notificações em cada etapa. Versão **3.1.1**.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê, responde e marca as alternativas, com notificações em cada etapa. Versão **3.1.2**.
 
 ## Instalar o bookmarklet
 
@@ -31,7 +31,11 @@ A chave da Groq fica exclusivamente na variável secreta **GROQ_API_KEY** da Ver
 
 Com **PUBLIC_HUB=true**, `/api/solve` aceita questões sem token. A origem da Sala do Futuro e os endereços confiáveis da implantação são permitidos por CORS; outras origens são recusadas. As alternativas, o enunciado, os modelos e o tamanho da consulta são validados no servidor.
 
+O preflight também aceita os cabeçalhos de rastreamento adicionados pela instrumentação da Sala do Futuro (`Request-Id`, `Request-Context`, `Traceparent`, `Tracestate`, `Baggage`). O teste de CORS usa servidores locais reais e um `fetch` instrumentado; não intercepta a API no Playwright.
+
 Há limites de **20 consultas por IP/minuto** e **60 consultas totais/minuto por instância**. São controles em memória, com tamanho limitado, e não uma cota global distribuída. Pausar ou fechar o hub impede novas consultas automáticas.
+
+A conta gratuita da Groq pode ser usada com os modelos oferecidos, sujeita às cotas da organização no [Console da Groq](https://console.groq.com/docs/rate-limits). Quando a Groq retorna 429, o servidor preserva o tempo de espera de `Retry-After` e o painel pede para aguardar antes de iniciar novamente. Uma espera indicada acima de oito segundos não dispara uma nova tentativa antecipada.
 
 Somente o texto da questão e das alternativas, além do modelo escolhido, é enviado ao servidor e à Groq. O hub não usa o RA ou a senha do portal, nem envia automaticamente cookies ou o restante da página. Não grava credenciais no navegador.
 

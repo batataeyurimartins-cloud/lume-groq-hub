@@ -51,3 +51,15 @@ test('public bookmark transport needs no token and never sends an old token', as
   const anonymous = createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json(answer)});
   assert.deepEqual(await anonymous.solve({question}),answer);
 });
+
+test('rate limiting reports the wait time without retrying or trusting provider text', async () => {
+  let calls=0;
+  const client=createHostedClient({endpoint,public:true,fetchImpl:async()=>{
+    calls++;
+    return Response.json({error:{code:'RATE_LIMIT',message:'private provider text'}},{status:429,headers:{'Retry-After':'75'}});
+  }});
+  await assert.rejects(client.solve({question}),error=>error.code==='RATE_LIMIT'&&error.retryAfter===75&&error.message.includes('75 s')&&!error.message.includes('private'));
+  assert.equal(calls,1);
+  const invalid=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json({error:{code:'RATE_LIMIT'}},{status:429,headers:{'Retry-After':'invalid'}})});
+  await assert.rejects(invalid.solve({question}),error=>error.code==='RATE_LIMIT'&&error.retryAfter===undefined);
+});

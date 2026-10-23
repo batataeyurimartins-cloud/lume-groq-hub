@@ -81,6 +81,33 @@ test('preflight succeeds only for allowed origins/methods/headers and needs no b
   }
 });
 
+test('Sala telemetry headers pass preflight without using Groq or bypassing origin and header checks',async()=>{
+  let calls=0;
+  const handler=createSolveHandler({env:{...env,PUBLIC_HUB:'true'},client:{solve:async()=>{calls++;return answer;}}});
+  const tracing='content-type, request-id, request-context, traceparent, tracestate, baggage';
+  const {res}=await invoke({handler,method:'OPTIONS',headers:{authorization:'','access-control-request-method':'POST','access-control-request-headers':tracing}});
+  assert.equal(res.statusCode,204);
+  const allowed=res.headers['access-control-allow-headers'].toLowerCase().split(',').map(name=>name.trim());
+  for(const name of tracing.split(', ')) assert.ok(allowed.includes(name));
+  assert.equal(res.headers['access-control-allow-origin'],origin);
+  for(const headers of [{origin:'https://evil.example','access-control-request-headers':tracing},{'access-control-request-headers':`${tracing}, x-unsafe`}]) {
+    assert.equal((await invoke({handler,method:'OPTIONS',headers})).res.statusCode,403);
+  }
+  assert.equal(calls,0);
+});
+
+test('Groq rate limits preserve a bounded Retry-After visible across origins',async()=>{
+  for(const [delay,expected] of [[75,'75'],[999999,'86400'],['secret',undefined],[-1,undefined]]) {
+    const handler=createSolveHandler({env,client:{solve:async()=>{throw Object.assign(new Error('provider-private'),{code:'RATE_LIMIT',retryAfter:delay});}}});
+    const {res}=await invoke({handler});
+    assert.equal(res.statusCode,429);
+    assert.equal(res.headers['retry-after'],expected);
+    assert.equal(res.headers['access-control-expose-headers'],'Retry-After');
+    assert.equal(res.headers['access-control-allow-origin'],origin);
+    assert.ok(!res.text.includes('provider-private'));
+  }
+});
+
 test('no-Origin CLI requests require the bearer; spoofed Host grants no origin',async()=>{
   const {res}=await invoke({headers:{origin:'',host:'evil.example'}});
   assert.equal(res.statusCode,200);
