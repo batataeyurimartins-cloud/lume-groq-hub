@@ -17,7 +17,7 @@ export function createHostedClient({ endpoint, token, fetchImpl = globalThis.fet
     TIMEOUT: 'A consulta demorou demais. Tente iniciar novamente.',
     ORIGIN: 'Este site não está autorizado a usar o hub hospedado.',
   };
-  async function solve({ question, model = 'llama-3.3-70b-versatile', signal } = {}) {
+  async function solve({ question, model = 'openai/gpt-oss-120b', signal } = {}) {
     if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
     if (!token || !question || typeof question.prompt !== 'string' || !Array.isArray(question.options)) throw failure('INPUT', messages.INPUT);
     const data = { question: { prompt: question.prompt, multiple: question.multiple === true, options: question.options.map(option => ({ text: option.text })) }, model };

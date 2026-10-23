@@ -1,6 +1,6 @@
 # Lume · Hub Groq para o console
 
-Painel flutuante compacto (286 px), sem lista, prévia ou contagem de questões detectadas. Responde e marca automaticamente, com notificações em cada etapa. Versão **3.0.0**, com instalador e API para Vercel.
+Painel flutuante compacto (286 px), sem lista, prévia ou contagem de questões detectadas. Responde e marca automaticamente, com notificações em cada etapa. Versão **3.0.1**, com instalador e API para Vercel.
 
 ## Instalador hospedado
 

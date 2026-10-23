@@ -5,7 +5,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const modules = ['page-adapter.js', 'groq-client.js', 'hosted-client.js', 'hub.js'];
 const sources = await Promise.all(modules.map(name => readFile(path.join(root, 'src', name), 'utf8')));
 const body = sources.map((source, index) => `\n// ${modules[index]}\n${source.replace(/\bexport\s+(?=(?:async\s+)?(?:function|const|class)\b)/g, '')}`).join('\n');
-const bundle = `/* Lume · Hub Groq v3.0.0 | Cole o arquivo inteiro no console da atividade. */\n(() => {\n'use strict';\n${body}\n})();\n`;
+const bundle = `/* Lume · Hub Groq v3.0.1 | Cole o arquivo inteiro no console da atividade. */\n(() => {\n'use strict';\n${body}\n})();\n`;
 await mkdir(path.join(root, 'dist'), {recursive:true});
 await writeFile(path.join(root, 'dist/hub-groq.js'), bundle);
 await copyFile(path.join(root, 'demo.html'), path.join(root, 'dist/demo.html'));

@@ -41,7 +41,7 @@ test('authenticated allowed-origin POST returns validated answer and restrictive
   assert.equal(res.statusCode,200);
   assert.deepEqual(res.body,answer);
   assert.equal(received.apiKey,env.GROQ_API_KEY);
-  assert.equal(received.model,'llama-3.3-70b-versatile');
+  assert.equal(received.model,'openai/gpt-oss-120b');
   assert.deepEqual(received.question,question);
   assert.ok(received.signal instanceof AbortSignal);
   assert.equal(res.headers['access-control-allow-origin'],origin);
@@ -127,9 +127,9 @@ test('only POST JSON is accepted and question/model payloads are validated',asyn
   }
   let model;
   const handler=createSolveHandler({env,client:{solve:async input=>{model=input.model;return answer;}}});
-  const {res}=await invoke({handler,body:{question,model:'llama-3.1-8b-instant'}});
+  const {res}=await invoke({handler,body:{question,model:'openai/gpt-oss-20b'}});
   assert.equal(res.statusCode,200);
-  assert.equal(model,'llama-3.1-8b-instant');
+  assert.equal(model,'openai/gpt-oss-20b');
 });
 
 test('raw request body is byte-limited even when chunked or using multibyte text',async()=>{

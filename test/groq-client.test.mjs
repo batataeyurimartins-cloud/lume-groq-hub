@@ -17,7 +17,7 @@ test('single choice sends only the question and returns validated indices', asyn
   assert.equal(request.options.headers.Authorization, 'Bearer gsk_test_only');
   assert.equal(request.options.credentials, 'omit');
   const body = JSON.parse(request.options.body);
-  assert.equal(body.model, 'llama-3.3-70b-versatile');
+  assert.equal(body.model, 'openai/gpt-oss-120b');
   assert.deepEqual(body.response_format, { type: 'json_object' });
   assert.deepEqual(JSON.parse(body.messages[1].content), { prompt: question.prompt, multiple: false, options: question.options.map((option, index) => ({ index, text: option.text })) });
 });

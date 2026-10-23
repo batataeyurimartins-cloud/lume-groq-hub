@@ -1,4 +1,4 @@
-/* Lume · Hub Groq v3.0.0 | Cole o arquivo inteiro no console da atividade. */
+/* Lume · Hub Groq v3.0.1 | Cole o arquivo inteiro no console da atividade. */
 (() => {
 'use strict';
 
@@ -340,7 +340,7 @@ function createGroqClient({
     return Math.max(0, Math.min(8000, retryDelayMs));
   }
 
-  async function solve({ apiKey, model = 'llama-3.3-70b-versatile', question, signal } = {}) {
+  async function solve({ apiKey, model = 'openai/gpt-oss-120b', question, signal } = {}) {
     if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
     const data = validateInput(apiKey, model, question);
     if (typeof fetchImpl !== 'function') throw failure('NETWORK', 'Este navegador não oferece suporte a consultas com fetch.');
@@ -397,7 +397,8 @@ function createGroqClient({
       const body = JSON.stringify({
         model,
         temperature: 0.1,
-        max_tokens: 1300,
+        max_tokens: 3000,
+        ...(model.startsWith('openai/gpt-oss-') ? { reasoning_effort: 'low' } : {}),
         response_format: { type: 'json_object' },
         messages: [
           {
@@ -478,7 +479,7 @@ function createHostedClient({ endpoint, token, fetchImpl = globalThis.fetch, tim
     TIMEOUT: 'A consulta demorou demais. Tente iniciar novamente.',
     ORIGIN: 'Este site não está autorizado a usar o hub hospedado.',
   };
-  async function solve({ question, model = 'llama-3.3-70b-versatile', signal } = {}) {
+  async function solve({ question, model = 'openai/gpt-oss-120b', signal } = {}) {
     if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
     if (!token || !question || typeof question.prompt !== 'string' || !Array.isArray(question.options)) throw failure('INPUT', messages.INPUT);
     const data = { question: { prompt: question.prompt, multiple: question.multiple === true, options: question.options.map(option => ({ text: option.text })) }, model };
@@ -522,7 +523,7 @@ function createHostedClient({ endpoint, token, fetchImpl = globalThis.fetch, tim
 // hub.js
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.0.0';
+  const version = '3.0.1';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && typeof suppliedConfig.token === 'string'
@@ -566,7 +567,7 @@ function mountLumeHub() {
       <div class="body"><div class="main"><div class="status" data-active="false"><span class="dot"></span><span class="status-text">Pronto para começar</span></div><button class="primary toggle">Iniciar automático</button><div class="foot"><span>Alt + Shift + G</span><button class="undo" disabled>Desfazer</button></div></div>
         <div class="settings" id="lume-settings" hidden>
           <div class="field"><label class="form-label" for="lume-api-key">Chave da API Groq</label><input class="input api-key" id="lume-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…"></div>
-          <div class="field"><label class="form-label" for="lume-model">Modelo</label><input class="input model" id="lume-model" value="llama-3.3-70b-versatile" list="lume-models" autocomplete="off" spellcheck="false"><datalist id="lume-models"><option value="llama-3.3-70b-versatile"></option><option value="llama-3.1-8b-instant"></option></datalist></div>
+          <div class="field"><label class="form-label" for="lume-model">Modelo</label><input class="input model" id="lume-model" value="openai/gpt-oss-120b" list="lume-models" autocomplete="off" spellcheck="false"><datalist id="lume-models"><option value="openai/gpt-oss-120b"></option><option value="openai/gpt-oss-20b"></option></datalist></div>
           <details><summary>Leitura personalizada</summary><div class="field"><label class="form-label" for="lume-container">Bloco de cada questão</label><input class="input container-selector" id="lume-container" placeholder="Ex.: .question" spellcheck="false"></div><div class="field"><label class="form-label" for="lume-prompt">Enunciado</label><input class="input prompt-selector" id="lume-prompt" placeholder="Ex.: .question-text" spellcheck="false"></div><div class="field"><label class="form-label" for="lume-options">Alternativas</label><input class="input option-selector" id="lume-options" placeholder="Ex.: input[type=radio]" spellcheck="false"></div></details>
           <p class="help">Chave apenas na memória. Ao iniciar, as questões são enviadas à Groq e as sugestões são marcadas automaticamente. A IA pode errar.</p><button class="primary save-settings">Salvar e iniciar</button>
         </div>
@@ -582,7 +583,7 @@ function mountLumeHub() {
   const events = new AbortController();
   const toastTimers = new Map();
   const state = {
-    key: hostedConfig ? hostedConfig.token : '', model: 'llama-3.3-70b-versatile', selectors: {}, active: false, processing: false,
+    key: hostedConfig ? hostedConfig.token : '', model: 'openai/gpt-oss-120b', selectors: {}, active: false, processing: false,
     closed: false, minimized: false, settingsOpen: false, controller: null, run: 0,
     handled: new Map(), warnings: new Set(), count: 0, undo: null, undoEntry: null,
     dirty: false, timer: null,
@@ -806,7 +807,7 @@ function mountLumeHub() {
     if (state.processing) return;
     pause(false);
     state.key = hostedConfig ? hostedConfig.token : $('.api-key').value.trim();
-    state.model = $('.model').value.trim() || 'llama-3.3-70b-versatile';
+    state.model = $('.model').value.trim() || 'openai/gpt-oss-120b';
     state.selectors = {
       containerSelector: $('.container-selector').value.trim(),
       promptSelector: $('.prompt-selector').value.trim(),

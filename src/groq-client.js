@@ -67,7 +67,7 @@ export function createGroqClient({
     return Math.max(0, Math.min(8000, retryDelayMs));
   }
 
-  async function solve({ apiKey, model = 'llama-3.3-70b-versatile', question, signal } = {}) {
+  async function solve({ apiKey, model = 'openai/gpt-oss-120b', question, signal } = {}) {
     if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
     const data = validateInput(apiKey, model, question);
     if (typeof fetchImpl !== 'function') throw failure('NETWORK', 'Este navegador não oferece suporte a consultas com fetch.');
@@ -124,7 +124,8 @@ export function createGroqClient({
       const body = JSON.stringify({
         model,
         temperature: 0.1,
-        max_tokens: 1300,
+        max_tokens: 3000,
+        ...(model.startsWith('openai/gpt-oss-') ? { reasoning_effort: 'low' } : {}),
         response_format: { type: 'json_object' },
         messages: [
           {

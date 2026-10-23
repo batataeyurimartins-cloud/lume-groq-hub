@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createGroqClient } from '../src/groq-client.js';
 
 const MAX_BODY_BYTES = 48 * 1024;
-const MODELS = new Set(['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']);
+const MODELS = new Set(['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
 const DEFAULT_ORIGIN = 'https://saladofuturo.educacao.sp.gov.br';
 const LOCAL_ERROR = Symbol('localApiError');
 
@@ -117,10 +117,10 @@ function validateBody(body, env) {
   });
   const cleanQuestion = { prompt: question.prompt, multiple: question.multiple, options };
   if (JSON.stringify(cleanQuestion).length > 32000) throw apiError('INPUT', 'A questão é longa demais. Reduza o texto capturado.');
-  const configuredModel = env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  const configuredModel = env.GROQ_MODEL || 'openai/gpt-oss-120b';
   if (!MODELS.has(configuredModel)) throw apiError('CONFIG', 'O serviço está com um modelo indisponível na configuração.', 503);
   const model = body.model === undefined ? configuredModel : body.model;
-  if (typeof model !== 'string' || !MODELS.has(model)) throw apiError('MODEL', 'Escolha um dos modelos permitidos: llama-3.3-70b-versatile ou llama-3.1-8b-instant.');
+  if (typeof model !== 'string' || !MODELS.has(model)) throw apiError('MODEL', 'Escolha um dos modelos permitidos: openai/gpt-oss-120b ou openai/gpt-oss-20b.');
   return { question: cleanQuestion, model };
 }
 
