@@ -4,12 +4,14 @@ import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { createSolveHandler, createRequestLimiter } from '../api/solve.js';
 import { createGroqClient } from '../src/groq-client.js';
+import { VISION_MODEL } from '../src/image-input.js';
 
 const origin = 'https://saladofuturo.educacao.sp.gov.br';
 const env = { GROQ_API_KEY: 'gsk_dummy_test_only', HUB_ACCESS_TOKEN: 'dummy_access_token_for_tests_only' };
 const question = { prompt: 'Quanto é 2 + 2?', multiple: false, options: [{text:'3'}, {text:'4'}] };
 const answer = { indices:[1], explanation:'2 + 2 = 4.', confidence:'high' };
 const defaultClient = { solve: async () => answer };
+const pngImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZncAAAAASUVORK5CYII=';
 
 function makeRequest({method='POST', headers={}, body={question}, stream}={}) {
   const req = stream === undefined ? new EventEmitter() : Readable.from(stream);
@@ -368,8 +370,122 @@ test('server reuses the real Groq client without exposing provider credentials',
   assert.ok(!res.text.includes(env.GROQ_API_KEY));
 });
 
+test('image attachments are projected for every question type and route to the vision model',async()=>{
+  const image={url:pngImage,label:'Imagem 1 do enunciado'};
+  const common={explanation:'A imagem fornece os dados necessários.',confidence:'high'};
+  const cases=[
+    [question,answer],
+    [{kind:'blanks',prompt:'Complete conforme o gráfico.',fields:[{label:'Valor',options:[{text:'4'},{text:'8'}]}]},{selections:[1],...common}],
+    [{kind:'text',prompt:'Descreva o gráfico.',minLength:0,maxLength:100},{text:'O valor aumenta ao longo do tempo.',...common}],
+    [{kind:'order',prompt:'Organize a sequência mostrada.',options:[{text:'A'},{text:'B'}]},{order:[1,0],...common}],
+  ];
+  for(const [base,output] of cases) {
+    let received;
+    const handler=createSolveHandler({env,client:{solve:async input=>{received=input;return {...output,private:env.GROQ_API_KEY};}}});
+    const dirty={...base,images:[{...image,element:{private:'DOM'},cookies:'must-not-forward'}],page:'must-not-forward'};
+    const {res}=await invoke({handler,body:{question:dirty,model:'openai/gpt-oss-20b',apiKey:'must-not-use'}});
+    assert.equal(res.statusCode,200);
+    assert.equal(received.model,VISION_MODEL,'A text model selected in settings cannot receive image attachments');
+    assert.deepEqual(received.question,{...base,images:[image]});
+    assert.equal(received.apiKey,env.GROQ_API_KEY);
+    assert.deepEqual(res.body,output);
+    assert.ok(!res.text.includes(env.GROQ_API_KEY));
+    assert.ok(!res.text.includes(pngImage));
+  }
+});
+
+test('public HTTPS images are forwarded as data only and an empty image list keeps text routing',async()=>{
+  const image={url:'https://cdn.example.com/atividade/grafico.png',label:'Gráfico do enunciado'};
+  let received;
+  const handler=createSolveHandler({env,client:{solve:async input=>{received=input;return answer;}}});
+  const remote=await invoke({handler,body:{question:{...question,images:[image]}}});
+  assert.equal(remote.res.statusCode,200);
+  assert.deepEqual(received.question.images,[image]);
+  assert.equal(received.model,VISION_MODEL);
+  const empty=await invoke({handler,body:{question:{...question,images:[]},model:'openai/gpt-oss-20b'}});
+  assert.equal(empty.res.statusCode,200);
+  assert.deepEqual(received.question,question);
+  assert.equal(received.model,'openai/gpt-oss-20b');
+  const explicit=await invoke({handler,body:{question,model:VISION_MODEL}});
+  assert.equal(explicit.res.statusCode,200);
+  assert.equal(received.model,VISION_MODEL);
+});
+
+test('larger image uploads are accepted within a bounded body while text-only requests retain 48KB',async()=>{
+  // PNG signature/content with trailing bytes exercises transport size, not
+  // decoding; actual pixel decoding is covered by the browser adapter tests.
+  const largeImage='data:image/png;base64,'+Buffer.concat([Buffer.from(pngImage.split(',')[1],'base64'),Buffer.alloc(80000)]).toString('base64');
+  const body={question:{...question,images:[{url:largeImage,label:'Imagem grande'}]}};
+  const raw=JSON.stringify(body);
+  assert.ok(Buffer.byteLength(raw)>48*1024);
+  for(const options of [
+    {body},
+    {body:raw,headers:{'content-length':String(Buffer.byteLength(raw))}},
+    {stream:[Buffer.from(raw.slice(0,30000)),Buffer.from(raw.slice(30000))]},
+  ]) {
+    let calls=0;
+    const handler=createSolveHandler({env,client:{solve:async input=>{calls++;assert.equal(input.question.images[0].url,largeImage);return answer;}}});
+    const {res}=await invoke({handler,...options});
+    assert.equal(res.statusCode,200);
+    assert.equal(calls,1);
+  }
+  for(const images of [undefined,[]]) {
+    const {res}=await invoke({body:{question:{...question,...(images?{images}:{} )},extra:'x'.repeat(50000)}});
+    assert.equal(res.statusCode,413);
+  }
+  for(const options of [
+    {headers:{'content-length':String(3*1024*1024+1)}},
+    {body:'x'.repeat(3*1024*1024+1)},
+    {stream:Array.from({length:4},()=>Buffer.alloc(1024*1024))},
+  ]) {
+    let calls=0;
+    const handler=createSolveHandler({env,client:{solve:async()=>{calls++;return answer;}}});
+    const {res}=await invoke({handler,...options});
+    assert.equal(res.statusCode,413);
+    assert.equal(calls,0,'Oversized uploads must never reach Groq');
+  }
+});
+
+test('malformed or excess images are rejected locally before any provider usage',async()=>{
+  const image={url:pngImage,label:'Enunciado'};
+  const invalid=[
+    null,{},'not-an-array',[null],Array.from({length:4},()=>image),
+    [{...image,label:''}],[{...image,label:'x'.repeat(301)}],
+    [{...image,url:'http://cdn.example.com/chart.png'}],
+    [{...image,url:'https://127.0.0.1/image.png'}],
+    [{...image,url:'https://localhost/image.png'}],
+    [{...image,url:'https://user:password@cdn.example.com/chart.png'}],
+    [{...image,url:'data:text/html;base64,PGgxPm5vPC9oMT4='}],
+    [{...image,url:'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4='}],
+    [{...image,url:'data:image/png;base64,not base64!'}],
+    [{...image,url:'data:image/png;base64,'+'A'.repeat(700000)}],
+  ];
+  for(const images of invalid) {
+    let calls=0;
+    const handler=createSolveHandler({env,client:{solve:async()=>{calls++;return answer;}}});
+    const {res}=await invoke({handler,body:{question:{...question,images}}});
+    assert.equal(res.statusCode,400);
+    assert.equal(res.body.error.code,'INPUT');
+    assert.equal(calls,0);
+    assert.ok(!res.text.includes('password'));
+    assert.ok(!res.text.includes(env.GROQ_API_KEY));
+  }
+});
+
+test('invalid vision configuration fails safely only for requests that need vision',async()=>{
+  let calls=0;
+  const handler=createSolveHandler({env:{...env,GROQ_VISION_MODEL:'unapproved/vision'},client:{solve:async()=>{calls++;return answer;}}});
+  const plain=await invoke({handler});
+  assert.equal(plain.res.statusCode,200);
+  const visual=await invoke({handler,body:{question:{...question,images:[{url:pngImage,label:'Imagem'}]}}});
+  assert.equal(visual.res.statusCode,503);
+  assert.equal(visual.res.body.error.code,'CONFIG');
+  assert.equal(calls,1);
+  assert.ok(!visual.res.text.includes(env.GROQ_API_KEY));
+});
+
 test('upstream failures use fixed public messages instead of provider error content',async()=>{
-  for (const [code,status] of [['AUTH',401],['RATE_LIMIT',429],['TIMEOUT',504],['NETWORK',502],['FORMAT',502],['INPUT',400],['MODEL',400],['API',502],['unknown',502]]) {
+  for (const [code,status] of [['AUTH',401],['RATE_LIMIT',429],['TIMEOUT',504],['NETWORK',502],['FORMAT',502],['INPUT',400],['IMAGE',422],['MODEL',400],['API',502],['unknown',502]]) {
     const handler=createSolveHandler({env,client:{solve:async()=>{throw Object.assign(new Error(`SECRET:${env.GROQ_API_KEY}`),{code,status:400});}}});
     const {res}=await invoke({handler});
     assert.equal(res.statusCode,status,code);

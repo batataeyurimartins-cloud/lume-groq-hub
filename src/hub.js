@@ -1,6 +1,6 @@
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.4.0';
+  const version = '3.5.0';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
@@ -334,7 +334,25 @@ function mountLumeHub() {
         notify('Buscando resposta…');
         let querying = true;
         try {
-          const answer = await client.solve({ apiKey: state.key, model: state.model, question, signal: controller.signal });
+          if (question.images?.length) {
+            status('Lendo imagens…');
+            notify('Imagens detectadas · lendo conteúdo…');
+          }
+          const preparedQuestion = typeof adapter.prepareQuestion === 'function'
+            ? await adapter.prepareQuestion(question, { signal: controller.signal }) : question;
+          syncTask();
+          if (state.closed || !state.active || state.task !== task || run !== state.run || controller.signal.aborted) break;
+          if (location.href !== pageUrl || !adapter.isCurrent(question)) {
+            if (location.href === pageUrl) state.handled.set(key, { status: 'skipped' });
+            notify('A questão mudou. Lendo a página novamente…');
+            state.dirty = true;
+            break;
+          }
+          if (preparedQuestion.images?.length) {
+            status('Analisando imagens…');
+            notify('Analisando imagens…');
+          }
+          const answer = await client.solve({ apiKey: state.key, model: state.model, question: preparedQuestion, signal: controller.signal });
           querying = false;
           syncTask();
           if (state.closed || !state.active || run !== state.run || controller.signal.aborted) break;
@@ -457,7 +475,7 @@ function mountLumeHub() {
   const routeTimer = setInterval(() => { if (taskLocation().key !== state.task?.key) syncTask(); }, 250);
   observer.observe(document.documentElement, {
     childList: true, subtree: true, characterData: true, attributes: true,
-    attributeFilter: ['aria-checked', 'aria-label', 'aria-labelledby', 'aria-hidden', 'aria-disabled', 'aria-expanded', 'aria-controls', 'role', 'hidden', 'style', 'class', 'disabled', 'name', 'type', 'for', 'id', 'placeholder', 'contenteditable', 'maxlength', 'minlength'],
+    attributeFilter: ['aria-checked', 'aria-label', 'aria-labelledby', 'aria-hidden', 'aria-disabled', 'aria-expanded', 'aria-controls', 'role', 'hidden', 'style', 'class', 'disabled', 'name', 'type', 'for', 'id', 'placeholder', 'contenteditable', 'maxlength', 'minlength', 'src', 'srcset', 'sizes', 'alt', 'data-src', 'data-original'],
   });
   function close() {
     if (state.closed) return;

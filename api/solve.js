@@ -1,9 +1,11 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { createGroqClient } from '../src/groq-client.js';
+import { VISION_MODEL, cleanQuestionImages, questionTextSize } from '../src/image-input.js';
 
-const MAX_BODY_BYTES = 48 * 1024;
-const MODELS = new Set(['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
+const MAX_TEXT_BODY_BYTES = 48 * 1024;
+const MAX_BODY_BYTES = 3 * 1024 * 1024;
+const MODELS = new Set(['openai/gpt-oss-120b', 'openai/gpt-oss-20b', VISION_MODEL]);
 const DEFAULT_ORIGIN = 'https://saladofuturo.educacao.sp.gov.br';
 // Sala's Application Insights fetch wrapper can add distributed-tracing
 // headers. Accept those names without granting access to additional origins.
@@ -105,7 +107,7 @@ export function createRequestLimiter({ now = Date.now, maxBuckets = 256 } = {}) 
 async function readBody(req) {
   const length = header(req, 'content-length');
   if (length && (!/^\d+$/.test(length) || Number(length) > MAX_BODY_BYTES)) {
-    throw apiError('INPUT', 'O corpo da consulta excede o limite de 48 KB.', 413);
+    throw apiError('INPUT', 'O envio da questão com imagens excede o limite de 3 MB.', 413);
   }
   let value = req.rawBody ?? req.body;
   if (value === undefined) {
@@ -123,7 +125,7 @@ async function readBody(req) {
       const onData = chunk => {
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         size += bytes.length;
-        if (size > MAX_BODY_BYTES) return fail(apiError('INPUT', 'O corpo da consulta excede o limite de 48 KB.', 413));
+        if (size > MAX_BODY_BYTES) return fail(apiError('INPUT', 'O envio da questão com imagens excede o limite de 3 MB.', 413));
         chunks.push(bytes);
       };
       const onEnd = () => { cleanup(); resolve(Buffer.concat(chunks)); };
@@ -144,10 +146,21 @@ async function readBody(req) {
   // Vercel may supply an already parsed body; check Content-Length above and
   // the actual raw buffer when available, then also bound its parsed form.
   if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > MAX_BODY_BYTES) {
-    throw apiError('INPUT', 'O corpo da consulta excede o limite de 48 KB.', 413);
+    throw apiError('INPUT', 'O envio da questão com imagens excede o limite de 3 MB.', 413);
   }
-  try { return JSON.parse(raw); }
-  catch { throw apiError('INPUT', 'O corpo da consulta precisa ser JSON válido.'); }
+  const rawSize = Math.max(Buffer.byteLength(raw, 'utf8'), Number(length) || 0);
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch {
+    if (rawSize > MAX_TEXT_BODY_BYTES) throw apiError('INPUT', 'O corpo da consulta sem imagens excede o limite de 48 KB.', 413);
+    throw apiError('INPUT', 'O corpo da consulta precisa ser JSON válido.');
+  }
+  // The larger upload budget is reserved for image attachments. Keep the
+  // original bound for text-only requests, including parsed Vercel bodies.
+  if (rawSize > MAX_TEXT_BODY_BYTES && !(Array.isArray(parsed?.question?.images) && parsed.question.images.length > 0)) {
+    throw apiError('INPUT', 'O corpo da consulta sem imagens excede o limite de 48 KB.', 413);
+  }
+  return parsed;
 }
 
 function validateBody(body, env) {
@@ -200,11 +213,20 @@ function validateBody(body, env) {
     }
     cleanQuestion = { kind, prompt: question.prompt, maxLength, minLength };
   } else throw apiError('INPUT', 'Este tipo de questão não é suportado.');
-  if (JSON.stringify(cleanQuestion).length > 32000) throw apiError('INPUT', 'A questão é longa demais. Reduza o texto capturado.');
+  let images;
+  try { images = cleanQuestionImages(question.images); }
+  catch { throw apiError('INPUT', 'As imagens da questão são inválidas. Use até 3 imagens PNG, JPEG ou WebP dentro do limite permitido.'); }
+  if (images?.length) cleanQuestion.images = images;
+  if (questionTextSize(cleanQuestion) > 32000) throw apiError('INPUT', 'A questão é longa demais. Reduza o texto capturado.');
   const configuredModel = env.GROQ_MODEL || 'openai/gpt-oss-120b';
   if (!MODELS.has(configuredModel)) throw apiError('CONFIG', 'O serviço está com um modelo indisponível na configuração.', 503);
-  const model = body.model === undefined ? configuredModel : body.model;
-  if (typeof model !== 'string' || !MODELS.has(model)) throw apiError('MODEL', 'Escolha um dos modelos permitidos: openai/gpt-oss-120b ou openai/gpt-oss-20b.');
+  let model = body.model === undefined ? configuredModel : body.model;
+  if (typeof model !== 'string' || !MODELS.has(model)) throw apiError('MODEL', 'Escolha um dos modelos permitidos nos ajustes do hub.');
+  if (images?.length) {
+    const visionModel = env.GROQ_VISION_MODEL || VISION_MODEL;
+    if (visionModel !== VISION_MODEL) throw apiError('CONFIG', 'O serviço está com um modelo de imagens indisponível na configuração.', 503);
+    model = visionModel;
+  }
   return { question: cleanQuestion, model };
 }
 
@@ -250,6 +272,7 @@ function publicFailure(error) {
     NETWORK: [502, 'O serviço não conseguiu conectar à Groq. Tente novamente.'],
     FORMAT: [502, 'A Groq retornou uma resposta inválida. Nenhuma alternativa foi marcada.'],
     INPUT: [400, 'A questão enviada não pôde ser processada. Confira o enunciado e as alternativas.'],
+    IMAGE: [422, 'Não foi possível ler as imagens desta questão. Confira se elas carregaram e tente novamente.'],
     MODEL: [400, 'O modelo selecionado está indisponível. Tente o outro modelo permitido.'],
     ABORTED: [408, 'Consulta cancelada.'],
   };

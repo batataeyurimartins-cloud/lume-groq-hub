@@ -1,6 +1,6 @@
 # Lume · Favorito automático com Groq
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos e monta frases com blocos de palavras, com notificações em cada etapa. Versão **3.4.0**.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos, monta frases com blocos de palavras e lê imagens das questões, com notificações em cada etapa. Versão **3.5.0**.
 
 ## Instalar o bookmarklet
 
@@ -23,6 +23,7 @@ Após uma atualização, feche o hub no **×** e clique no mesmo favorito para c
 - Nas lacunas, o hub abre os menus para ler as opções, fecha-os e consulta a Groq uma vez para o conjunto. Depois preenche cada campo, mesmo quando a Sala remove as palavras escolhidas dos outros menus. O contador aumenta uma vez pela questão completa.
 - Nas questões de texto, preenche o campo **Responder** respeitando os limites de caracteres. As notificações mostram **Questão de texto detectada** e **Preenchendo respostas…**.
 - Nos blocos de palavras **CLOUD**, lê o banco completo e clica nos blocos na ordem da frase. Palavras repetidas são preservadas como blocos diferentes. A Groq monta a sequência com os textos dos blocos; o cliente os converte para os índices originais, sem uma segunda consulta. Esse cuidado reduz erros de posição, mas não garante uma resposta correta. Mostra **Ordenando palavras…** e conta uma resposta após confirmar toda a sequência. **Desfazer** restaura a seleção anterior, inclusive uma frase parcialmente montada.
+- Nas questões com imagens, mostra **Lendo imagens…** e **Analisando imagens…**. Envia até três imagens do enunciado e das alternativas junto com o texto; usa automaticamente o modelo de visão. Alternativas compostas apenas por imagens também recebem identificação própria. Imagem indisponível, formato não suportado ou excesso de imagens interrompe a consulta com um aviso.
 - **Desfazer** pausa a tarefa e restaura a última seleção quando a questão e a seleção continuam iguais.
 - A engrenagem **Ajustes** permite escolher o modelo e indicar seletores personalizados, se necessário.
 - Arraste o cabeçalho para mover o painel. Use minimizar ou `Alt+Shift+G` para mostrar/ocultar. Fechar cancela as solicitações e remove o hub da página.
@@ -31,7 +32,7 @@ O hub acompanha novas questões da mesma tarefa enquanto estiver ativo. Quando a
 
 ## API pública e dados
 
-A chave da Groq fica exclusivamente na variável secreta **GROQ_API_KEY** da Vercel. Não está no GitHub, no site, no favorito ou no script enviado ao navegador. A integração usa `openai/gpt-oss-120b`, com a opção `openai/gpt-oss-20b`.
+A chave da Groq fica exclusivamente na variável secreta **GROQ_API_KEY** da Vercel. Não está no GitHub, no site, no favorito ou no script enviado ao navegador. As questões de texto usam `openai/gpt-oss-120b`, com a opção `openai/gpt-oss-20b`. Questões com imagens usam automaticamente `qwen/qwen3.8-27b`, modelo de visão disponível no plano gratuito e atualmente em prévia na Groq. Consulte a [documentação de visão](https://console.groq.com/docs/vision).
 
 Com **PUBLIC_HUB=true**, `/api/solve` aceita questões sem token. A origem da Sala do Futuro e os endereços confiáveis da implantação são permitidos por CORS; outras origens são recusadas. As alternativas, o enunciado, os modelos e o tamanho da consulta são validados no servidor.
 
@@ -39,9 +40,9 @@ O preflight também aceita os cabeçalhos de rastreamento adicionados pela instr
 
 Há limites de **20 consultas por IP/minuto** e **60 consultas totais/minuto por instância**. São controles em memória, com tamanho limitado, e não uma cota global distribuída. Pausar ou fechar o hub impede novas consultas automáticas.
 
-A conta gratuita da Groq pode ser usada com os modelos oferecidos, sujeita às cotas da organização no [Console da Groq](https://console.groq.com/docs/rate-limits). Quando a Groq retorna 429, o servidor preserva o tempo de espera de `Retry-After` e o painel pede para aguardar antes de iniciar novamente. Uma espera indicada acima de oito segundos não dispara uma nova tentativa antecipada.
+A conta gratuita da Groq pode ser usada com os modelos oferecidos, sujeita às cotas da organização no [Console da Groq](https://console.groq.com/docs/rate-limits). Quando a Groq retorna 429, o servidor preserva o tempo de espera de `Retry-After` e o painel pede para aguardar antes de iniciar novamente. Uma espera indicada acima de oito segundos não dispara uma nova tentativa antecipada. Imagens consomem mais tokens da cota gratuita: a Groq documenta 2.048 tokens de entrada por imagem. O envio usa uma única consulta por questão, com até três imagens; dados de imagem não são repetidos no texto do pedido. O corpo da API é limitado a 3 MB com imagens e 48 KB sem imagens; o orçamento de texto continua em 32.000 caracteres.
 
-Somente o enunciado, as alternativas ou opções das lacunas, os limites do campo de texto e o modelo escolhido são enviados ao servidor e à Groq. O hub não usa o RA ou a senha do portal, nem envia automaticamente cookies ou o restante da página. Não grava credenciais no navegador.
+Somente o enunciado, as alternativas ou opções das lacunas, os limites do campo de texto, as imagens reconhecidas dentro da questão e o modelo são enviados ao servidor e à Groq. O nome da tarefa e o restante da página ficam no navegador. Imagens são compactadas no navegador quando possível; se uma imagem pública bloquear a captura por CORS, seu endereço HTTPS pode ser encaminhado à Groq. O servidor não baixa endereços de imagens. O hub não usa o RA ou a senha do portal, nem envia automaticamente cookies ou o restante da página. Não grava credenciais no navegador.
 
 Se `PUBLIC_HUB` não for `true`, o endpoint mantém o modo privado e exige `HUB_ACCESS_TOKEN`. Essa variável não é usada pelo favorito público.
 
@@ -57,7 +58,7 @@ Nas discursivas, o formulário real inclui um campo invisível chamado `hidden`.
 
 O formato **CLOUD** é identificado pelo painel **Resposta do Aluno** e seu banco de palavras. O leitor inclui os blocos já selecionados que a Sala mantém ocultos no banco, e usa os botões das palavras para restaurar a resposta. Não aciona a entrega da atividade.
 
-Redações em editores próprios, outros formatos de ordenação por arrastar e soltar, canvas, Shadow DOM de outros componentes e frames de outro domínio podem exigir adaptadores específicos. Não há OCR: imagens, gráficos, áudio e vídeo não são enviados ao modelo.
+Redações em editores próprios, outros formatos de ordenação por arrastar e soltar, canvas, Shadow DOM de outros componentes e frames de outro domínio podem exigir adaptadores específicos. Imagens PNG, JPEG e WebP podem ser analisadas pelo modelo de visão, incluindo textos e gráficos legíveis. A captura usa no máximo 2.000 pixels no maior lado e tem orçamento de tamanho; detalhes pequenos ou borrados podem não ser lidos corretamente. Canvas, SVG, GIF, áudio e vídeo exigem suporte específico e não são enviados como se fossem imagens válidas.
 
 Nos seletores personalizados, indique o bloco de cada questão, o enunciado dentro dele e os controles de alternativas. Exemplo da demonstração:
 
@@ -79,6 +80,7 @@ Variáveis de produção:
 GROQ_API_KEY       Secret: chave da Groq
 PUBLIC_HUB        Config: true
 GROQ_MODEL        Config: openai/gpt-oss-120b
+GROQ_VISION_MODEL Opcional: qwen/qwen3.8-27b (padrão automático)
 ALLOWED_ORIGINS    Opcional: origens exatas separadas por vírgulas
 ```
 

@@ -22,6 +22,70 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
     }
     return true;
   }
+  const IMAGE_LIMIT = 3;
+  const IMAGE_DATA_LIMIT = 700000;
+  const IMAGE_DOWNLOAD_LIMIT = 8 * 1024 * 1024;
+  const imageError = message => Object.assign(new Error(message), { code: 'IMAGE' });
+  function relevantImages(root) {
+    return Array.from(root.querySelectorAll('img')).filter(image => {
+      if (!formVisible(image, root) || image.closest('button,nav,header,footer,.MuiAvatar-root,.MuiSvgIcon-root')) return false;
+      const width = Number(image.getAttribute('width')) || image.naturalWidth;
+      const height = Number(image.getAttribute('height')) || image.naturalHeight;
+      return !((width > 0 && width <= 2) && (height > 0 && height <= 2) && !normalize(image.alt));
+    });
+  }
+  function imageSource(image) {
+    return image.currentSrc || image.src || image.getAttribute('data-src') || image.getAttribute('data-original') || '';
+  }
+  function visualContext(root, controls = [], omitted = []) {
+    const wrappers = controls.map(optionWrapper);
+    const images = relevantImages(root).filter(image => !omitted.some(element => element.contains(image)));
+    let stem = 0;
+    const optionCounts = new Map();
+    const descriptors = images.map(element => {
+      const option = wrappers.findIndex(wrapper => wrapper === element || wrapper.contains(element));
+      const count = option < 0 ? ++stem : (optionCounts.get(option) || 0) + 1;
+      if (option >= 0) optionCounts.set(option, count);
+      const alt = normalize(element.alt);
+      const label = `${option < 0 ? 'Imagem do enunciado' : `Alternativa ${option + 1} · imagem`} ${count}${alt ? `: ${alt}` : ''}`.slice(0, 300);
+      return { element, url: imageSource(element), label, alt, src: element.getAttribute('src') || '',
+        srcset: element.getAttribute('srcset') || '', sizes: element.getAttribute('sizes') || '',
+        lazy: [element.getAttribute('data-src') || '', element.getAttribute('data-original') || ''] };
+    });
+    const unsupported = Array.from(root.querySelectorAll('canvas,svg,video')).filter(element => {
+      if (!formVisible(element, root) || element.closest('button,.MuiSvgIcon-root,.MuiRadio-root,.MuiCheckbox-root') ||
+          omitted.some(item => item.contains(element))) return false;
+      if (element.tagName.toLowerCase() !== 'svg') return true;
+      const bounds = element.getBoundingClientRect();
+      return Boolean(element.querySelector('image')) || bounds.width > 32 || bounds.height > 32;
+    });
+    let issue = unsupported.length ? 'Esta questão tem gráfico em canvas, SVG ou vídeo que ainda não pode ser lido. Nenhuma resposta foi preenchida.' : '';
+    if (descriptors.some(image => /^data:image\/(?!png[;,]|jpe?g[;,]|webp[;,])/i.test(image.url) || /\.(?:gif|svg|avif|bmp)(?:[?#]|$)/i.test(image.url))) {
+      issue = 'Há imagens em formato não suportado nesta questão. São aceitas imagens PNG, JPEG e WebP.';
+    }
+    if (descriptors.length > IMAGE_LIMIT) issue = `Esta questão tem mais de ${IMAGE_LIMIT} imagens. Não vou responder sem ler todas.`;
+    return { root, controls, omitted, images: descriptors, unsupported, issue,
+      signature: JSON.stringify([descriptors.map(({ url, label, alt, src, srcset, sizes, lazy }) => [url, label, alt, src, srcset, sizes, lazy]), unsupported.map(element => [element.tagName, element.getAttribute('src') || element.getAttribute('href') || ''])]) };
+  }
+  function attachVisuals(question, info, controls = [], omitted = []) {
+    const visual = visualContext(question.element, controls, omitted);
+    info.visual = visual;
+    if (visual.images.length) question.images = visual.images.map(({ element, url, label }) => ({ element, url, label }));
+    if (visual.issue) question.visualIssue = visual.issue;
+    if (visual.images.length || visual.unsupported.length) {
+      question.fingerprint = JSON.stringify([question.fingerprint, visual.signature]);
+      info.fingerprint = question.fingerprint;
+    }
+    return visual;
+  }
+  function visualsCurrent(info) {
+    const previous = info?.visual;
+    if (!previous) return true;
+    const current = visualContext(previous.root, previous.controls, previous.omitted);
+    return current.signature === previous.signature && current.images.length === previous.images.length &&
+      current.images.every((image, index) => image.element === previous.images[index].element) &&
+      current.unsupported.length === previous.unsupported.length && current.unsupported.every((element, index) => element === previous.unsupported[index]);
+  }
   const native = element => element.tagName === 'INPUT' && /^(radio|checkbox)$/i.test(element.type);
   const typeOf = element => native(element) ? element.type : element.getAttribute('role');
   function choiceControls(root) {
@@ -40,7 +104,7 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   }
   function optionWrapper(element) {
     const labels = labelsFor(element);
-    const readableLabel = labels.find(label => normalize(label.textContent));
+    const readableLabel = labels.find(label => normalize(label.textContent) || relevantImages(label).length);
     if (readableLabel) return readableLabel;
     if (!native(element)) return element;
     // Sala's MUI label contains only the radio icon; the statement is in a
@@ -49,7 +113,7 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
       let row = element.parentElement;
       for (let level = 0; row && level < 6; level++, row = row.parentElement) {
         if (row.matches('body,html,form,fieldset,[role="radiogroup"]') || choiceControls(row).length !== 1) break;
-        if (normalize(row.textContent)) return row;
+        if (normalize(row.textContent) || relevantImages(row).length) return row;
       }
     }
     if (labels.length) return labels[0];
@@ -58,14 +122,17 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
     const parent = element.parentElement;
     return parent && parent.querySelectorAll(CONTROL).length === 1 ? parent : element;
   }
-  function optionText(element) {
+  function optionText(element, index = 0) {
     const explicit = normalize(element.getAttribute('aria-label'));
     if (explicit) return explicit;
     const labels = labelsFor(element).filter(label => visible(label));
     const labelText = normalize(labels.map(label => label.textContent).join(' '));
     if (labelText) return labelText;
     const wrapper = optionWrapper(element);
-    if (wrapper !== element || !native(element)) return normalize(wrapper.textContent);
+    if (wrapper !== element || !native(element)) {
+      const text = normalize(wrapper.textContent);
+      return text || (relevantImages(wrapper).length ? `[Imagem da alternativa ${index + 1}]` : '');
+    }
     let text = '';
     for (let sibling = element.nextSibling; sibling; sibling = sibling.nextSibling) {
       if (sibling.nodeType === 1 && (sibling.matches(CONTROL) || /^(BR|INPUT|LABEL)$/.test(sibling.tagName))) break;
@@ -81,7 +148,7 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   function muiChoiceList(element) {
     if (!native(element) || !element.closest(MUI_CONTROL)) return null;
     const row = optionWrapper(element);
-    if (!normalize(row.textContent)) return null;
+    if (!normalize(row.textContent) && !relevantImages(row).length) return null;
     let parent = row.parentElement;
     for (let level = 0; parent && level < 6; level++, parent = parent.parentElement) {
       if (parent.matches('body,html,form')) return null;
@@ -198,7 +265,11 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
       if (!root) continue;
       const explicitRoot = settings.containerSelector ? members[0].closest(settings.containerSelector) : members[0].closest(CONTAINER);
       if (explicitRoot && members.every(element => explicitRoot.contains(element))) root = explicitRoot;
-      const options = members.map((element, index) => ({ index, text: optionText(element), element, type: typeOf(element) }));
+      if (!settings.containerSelector && !root.matches('fieldset,[data-question],[data-question-id],.question,.que')) {
+        const card = root.closest('article,section,.MuiPaper-elevation3,.MuiCard-root,[data-question-id]');
+        if (card && members.every(element => card.contains(element)) && choiceControls(card).every(element => members.includes(element))) root = card;
+      }
+      const options = members.map((element, index) => ({ index, text: optionText(element, index), element, type: typeOf(element) }));
       if (options.some(option => !option.text)) {
         warnings.push('Há alternativas sem texto legível; esse grupo foi ignorado.');
         continue;
@@ -211,6 +282,9 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
         root = parent;
         prompt = promptText(root, members, settings);
       }
+      if (!prompt && relevantImages(root).some(image => !members.some(member => optionWrapper(member).contains(image)))) {
+        prompt = 'Observe a imagem do enunciado e responda à questão.';
+      }
       if (!prompt) {
         warnings.push('Um grupo sem enunciado legível foi ignorado. Configure o seletor do enunciado.');
         continue;
@@ -219,10 +293,12 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
         warnings.push('Um bloco muito amplo foi ignorado. Configure o seletor da questão.');
         continue;
       }
-      if (root.querySelector('img,canvas,svg image,video')) warnings.push('Há conteúdo visual na página; imagens e gráficos não são enviados ao modelo.');
       const fingerprint = JSON.stringify([prompt, options.map(option => [option.text, option.type])]);
       const question = { id: `q-${key}`, prompt, options, multiple: options.every(option => option.type === 'checkbox'), element: root, fingerprint };
-      metadata.set(question, { settings, key, root, members: [...members], fingerprint });
+      const info = { settings, key, root, members: [...members], fingerprint };
+      const visual = attachVisuals(question, info, members);
+      if (visual.issue) warnings.push(visual.issue);
+      metadata.set(question, info);
       questions.push(question);
     }
     return { questions, warnings: [...new Set(warnings)] };
@@ -546,9 +622,11 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
     for (const group of groups) {
       if (group.kind === 'text' && (group.fields.length !== 1 || choices.questions.some(question => group.fields.some(field => question.element.contains(field.element))))) continue;
       if (group.kind === 'blanks' && (group.fields.length < 1 || group.fields.length > 20)) continue;
-      const prompt = fieldPrompt(group.root, group.fields, group.kind, group.settings);
+      const rawPrompt = fieldPrompt(group.root, group.fields, group.kind, group.settings);
+      const prompt = !rawPrompt.replace(/\[Lacuna \d+\]/g, '').trim() && relevantImages(group.root).length
+        ? `Observe a imagem do enunciado e responda à questão. ${rawPrompt}`.trim() : rawPrompt;
       if (!prompt || prompt.length > 20000 || !prompt.replace(/\[Lacuna \d+\]/g, '').trim()) continue;
-      const context = fieldContext(group, prompt);
+      const context = fieldContext(group, rawPrompt);
       const options = group.kind === 'blanks' ? group.fields.map(field => descriptorOptions(field, context)) : [];
       if (group.kind === 'blanks' && options.some(list => !list || list.length < 1 || list.length > 30 || list.some(option => !option.text))) {
         warnings.push('As opções das lacunas ainda não foram lidas. Tente iniciar novamente.');
@@ -563,8 +641,10 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
       const question = { kind: group.kind, id: `q-${group.kind}:${uid(group.root)}`, prompt, element: group.root, fingerprint, options: [] };
       if (group.kind === 'blanks') question.fields = group.fields.map((field, index) => ({ label: field.element.getAttribute('aria-label') || `Lacuna ${index + 1}`, element: field.element, options: options[index].map((option, optionIndex) => ({ index: optionIndex, text: option.text, element: option.element })) }));
       else Object.assign(question, limits, { field: group.fields[0].element });
-      metadata.set(question, { kind: group.kind, group, prompt, fingerprint, context, options, limits, expectedValues: group.fields.map(fieldValue) });
-      if (group.root.querySelector('img,canvas,svg image,video')) warnings.push('Há conteúdo visual na questão; imagens e gráficos não são enviados ao modelo.');
+      const info = { kind: group.kind, group, prompt: rawPrompt, fingerprint, context, options, limits, expectedValues: group.fields.map(fieldValue) };
+      const visual = attachVisuals(question, info);
+      if (visual.issue) warnings.push(visual.issue);
+      metadata.set(question, info);
       questions.push(question);
     }
     const ordering = scanOrders(config);
@@ -575,7 +655,7 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   }
   function isFormCurrent(question) {
     const info = metadata.get(question);
-    if (!info || !info.group.root.isConnected) return false;
+    if (!info || !info.group.root.isConnected || !visualsCurrent(info)) return false;
     const { group } = info;
     if (group.fields.some(field => !field.element.isConnected || !group.root.contains(field.element) || disabled(field.element) || (field.type === 'text' && field.element.readOnly))) return false;
     const current = Array.from(group.root.querySelectorAll(group.kind === 'blanks' ? SELECTOR : TEXT_SELECTOR))
@@ -740,7 +820,7 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
     const entry = info.entry;
     return entry.live && entry.grid.isConnected && entry.root.isConnected && entry.root.contains(entry.grid) &&
       entry.grid.contains(entry.answer) && entry.grid.contains(entry.bank) && entry.version === info.version &&
-      (view.location?.href || '') === info.url && orderPrompt(entry, info.settings) === info.prompt;
+      (view.location?.href || '') === info.url && orderPrompt(entry, info.settings) === info.prompt && visualsCurrent(info);
   }
   function isOrderCurrent(info) {
     return orderStructureCurrent(info) && sameOrderState(orderState(info.entry), info.expected);
@@ -786,7 +866,10 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
       const question = { kind: 'order', id: `q-order:${uid(grid)}`, element: root, prompt,
         options: words.map((text, index) => ({ index, text, element: state.words[index] })),
         fingerprint: JSON.stringify(['order', prompt, words]) };
-      metadata.set(question, { kind: 'order', entry, settings, prompt, version: entry.version, url: view.location?.href || '', expected: orderSnapshot(state) });
+      const info = { kind: 'order', entry, settings, prompt, version: entry.version, url: view.location?.href || '', expected: orderSnapshot(state) };
+      const visual = attachVisuals(question, info, [], [grid]);
+      if (visual.issue) warnings.push(visual.issue);
+      metadata.set(question, info);
       questions.push(question);
     }
     return { questions, warnings };
@@ -859,10 +942,166 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
       return { selected: false, message: error.message || 'Não foi possível ordenar os blocos.', ...(touched ? { undo } : {}) };
     }
   }
+  function publicImageURL(source) {
+    try {
+      const url = new view.URL(source, view.location?.href);
+      const host = url.hostname.toLowerCase();
+      if (source.length > 4096 || url.protocol !== 'https:' || url.username || url.password || url.hash || (url.port && url.port !== '443') ||
+          !host.includes('.') || host.includes(':') || /^[\d.]+$/.test(host) ||
+          host.endsWith('.') || /(?:^|\.)(?:localhost|local|internal|test|invalid)$/.test(host)) return null;
+      return url;
+    } catch { return null; }
+  }
+  async function waitForImage(image, signal) {
+    aborted(signal);
+    if (image.complete) {
+      if (!image.naturalWidth || !image.naturalHeight) throw imageError('Uma imagem da questão não carregou. Aguarde a imagem aparecer e tente novamente.');
+      return;
+    }
+    // Lazy images can be below the fold even though their question is ready.
+    // Loading the image does not move the page or change the student's answer.
+    if ('loading' in image) image.loading = 'eager';
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        image.removeEventListener('load', loaded);
+        image.removeEventListener('error', failed);
+        signal.removeEventListener('abort', canceled);
+      };
+      const loaded = () => {
+        cleanup();
+        if (image.naturalWidth && image.naturalHeight) resolve();
+        else reject(imageError('Uma imagem da questão está vazia ou não pôde ser carregada.'));
+      };
+      const failed = () => { cleanup(); reject(imageError('Uma imagem da questão não carregou. Não vou responder sem conseguir lê-la.')); };
+      const canceled = () => { cleanup(); reject(Object.assign(new Error('Leitura de imagem cancelada.'), { code: 'ABORTED' })); };
+      image.addEventListener('load', loaded, { once: true });
+      image.addEventListener('error', failed, { once: true });
+      signal.addEventListener('abort', canceled, { once: true });
+      if (signal.aborted) canceled();
+      else if (image.complete) loaded();
+    });
+  }
+  function encodeImage(source) {
+    const width = source.naturalWidth || source.width;
+    const height = source.naturalHeight || source.height;
+    if (!(width > 0 && height > 0) || width * height > 100000000) throw imageError('Uma imagem é grande demais ou não tem dimensões válidas.');
+    const canvas = doc.createElement('canvas');
+    for (const maximum of [2000, 1600, 1200]) {
+      const ratio = Math.min(1, maximum / width, maximum / height);
+      canvas.width = Math.max(1, Math.round(width * ratio));
+      canvas.height = Math.max(1, Math.round(height * ratio));
+      const context = canvas.getContext('2d');
+      if (!context) throw imageError('Este navegador não conseguiu preparar a imagem da questão.');
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(source, 0, 0, canvas.width, canvas.height);
+      const png = canvas.toDataURL('image/png');
+      if (png.length <= IMAGE_DATA_LIMIT) return png;
+      for (const quality of [0.9, 0.78, 0.64]) {
+        const jpeg = canvas.toDataURL('image/jpeg', quality);
+        if (jpeg.length <= IMAGE_DATA_LIMIT) return jpeg;
+      }
+    }
+    throw imageError('Uma imagem continua grande demais depois da preparação. Nenhuma resposta foi preenchida.');
+  }
+  async function downloadImage(source, signal, interruptible) {
+    const url = new view.URL(source, view.location?.href);
+    const response = await interruptible(view.fetch(url.href, {
+      signal, mode: 'cors', credentials: url.origin === view.location?.origin ? 'same-origin' : 'omit',
+      redirect: 'error', referrerPolicy: 'no-referrer',
+    }));
+    if (!response.ok) throw imageError('Não foi possível acessar uma imagem da questão.');
+    if (!/^image\/(?:png|jpe?g|webp)(?:;|$)/i.test(response.headers.get('content-type') || '')) {
+      throw imageError('Uma imagem não está em formato PNG, JPEG ou WebP.');
+    }
+    const length = Number(response.headers.get('content-length'));
+    if (length > IMAGE_DOWNLOAD_LIMIT) {
+      try { await interruptible(response.body?.cancel()); } catch { /* Reading is already bounded by its signal. */ }
+      throw imageError('Uma imagem excede o limite de 8 MB para leitura.');
+    }
+    if (!response.body?.getReader) throw imageError('Este navegador não permite preparar esta imagem.');
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      while (true) {
+        aborted(signal);
+        const part = await interruptible(reader.read());
+        if (part.done) break;
+        size += part.value.byteLength;
+        if (size > IMAGE_DOWNLOAD_LIMIT) throw imageError('Uma imagem excede o limite de 8 MB para leitura.');
+        chunks.push(part.value);
+      }
+    } catch (error) {
+      try { await interruptible(reader.cancel()); } catch { /* Preserve the original failure. */ }
+      throw error;
+    } finally { reader.releaseLock(); }
+    const blob = new view.Blob(chunks, { type: response.headers.get('content-type').split(';')[0] });
+    const bitmap = await interruptible(view.createImageBitmap(blob));
+    try { return encodeImage(bitmap); }
+    finally { bitmap.close(); }
+  }
+  async function prepareQuestion(question, { signal } = {}) {
+    aborted(signal);
+    const info = metadata.get(question);
+    if (!info || !isCurrent(question)) throw imageError('A questão mudou antes da leitura das imagens. Inicie novamente.');
+    const visual = info.visual;
+    if (visual?.issue) throw imageError(visual.issue);
+    if (!visual?.images.length) return question;
+    const controller = new view.AbortController();
+    const canceled = () => controller.abort();
+    signal?.addEventListener('abort', canceled, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 8000);
+    const interruptible = operation => new Promise((resolve, reject) => {
+      const onAbort = () => reject(Object.assign(new Error('Leitura de imagem cancelada.'), { code: 'ABORTED' }));
+      if (controller.signal.aborted) onAbort();
+      else controller.signal.addEventListener('abort', onAbort, { once: true });
+      Promise.resolve(operation).then(resolve, reject).finally(() => controller.signal.removeEventListener('abort', onAbort));
+    });
+    try {
+      const images = [];
+      for (const descriptor of visual.images) {
+        aborted(controller.signal);
+        await interruptible(waitForImage(descriptor.element, controller.signal));
+        if (!isCurrent(question)) throw imageError('A imagem da questão mudou durante a leitura. Inicie novamente.');
+        let url;
+        try { url = encodeImage(descriptor.element); }
+        catch (error) {
+          aborted(controller.signal);
+          // A loaded cross-origin image can taint canvas even when its CDN
+          // allows fetch. Fetch only its bytes, never an enclosing page.
+          if (error?.name !== 'SecurityError') throw error;
+          try { url = await downloadImage(descriptor.url, controller.signal, interruptible); }
+          catch (downloadError) {
+            aborted(controller.signal);
+            const remote = publicImageURL(descriptor.url);
+            // An authenticated/same-origin or blob image must be encoded here.
+            // A public remote URL can instead be fetched by the vision model.
+            if (!remote || remote.origin === view.location?.origin) throw imageError('O navegador bloqueou a leitura de uma imagem. Não vou responder sem conseguir enviá-la.');
+            url = remote.href;
+          }
+        }
+        images.push({ url, label: descriptor.label });
+      }
+      if (!isCurrent(question)) throw imageError('A imagem da questão mudou durante a leitura. Inicie novamente.');
+      return { ...question, images };
+    } catch (error) {
+      if (timedOut) throw imageError('A leitura das imagens demorou mais de 8 segundos. Aguarde as imagens carregarem e tente novamente.');
+      aborted(signal);
+      if (error?.code === 'ABORTED') throw error;
+      if (error?.code === 'IMAGE') throw error;
+      throw imageError('Não foi possível preparar uma imagem desta questão. Nenhuma resposta foi preenchida.');
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', canceled);
+      controller.abort();
+    }
+  }
   function destroy() {
     for (const entry of orderBindings) { entry.controller.abort(); entry.live = false; }
     orderBindings.clear();
   }
 
-  return { scan, isCurrent, apply, prepare, destroy };
+  return { scan, isCurrent, apply, prepare, prepareQuestion, destroy };
 }

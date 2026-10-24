@@ -179,3 +179,54 @@ test('hosted ordering validates block count, text and total size before network'
   await client.solve({question:{...orderQuestion,options:Array.from({length:60},(_,index)=>({text:`bloco ${index}`}))}});
   assert.equal(calls,1);
 });
+
+const visionImage={label:'Imagem do enunciado 1',url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6lU0AAAAASUVORK5CYII='};
+
+test('hosted visual questions send only labeled images and automatically request the vision model',async()=>{
+  let sent;
+  const client=createHostedClient({endpoint,public:true,fetchImpl:async(_,options)=>{sent=JSON.parse(options.body);return Response.json(answer);}});
+  assert.deepEqual(await client.solve({question:{...question,images:[{...visionImage,element:{private:true},cookie:'private-cookie'}]},model:'openai/gpt-oss-20b'}),answer);
+  assert.equal(sent.model,'qwen/qwen3.8-27b');
+  assert.deepEqual(sent.question.images,[visionImage]);
+  assert.ok(!JSON.stringify(sent).includes('private'));
+});
+
+test('hosted images work with every field type and retain text-only wire compatibility',async()=>{
+  for(const [visualQuestion,result] of [
+    [blanks,{selections:[1,0],...details}],
+    [{kind:'text',prompt:'Descreva a figura.',minLength:5,maxLength:100},{text:'A figura mostra uma planta.',...details}],
+    [orderQuestion,{order:[2,1,0],...details}],
+  ]) {
+    let sent;
+    const client=createHostedClient({endpoint,public:true,fetchImpl:async(_,options)=>{sent=JSON.parse(options.body);return Response.json(result);}});
+    assert.deepEqual(await client.solve({question:{...visualQuestion,images:[visionImage]}}),result);
+    assert.deepEqual(sent.question.images,[visionImage]);
+    assert.equal(sent.question.kind,visualQuestion.kind);
+  }
+  let sent;
+  const client=createHostedClient({endpoint,public:true,fetchImpl:async(_,options)=>{sent=JSON.parse(options.body);return Response.json(answer);}});
+  await client.solve({question:{...question,images:[]}});
+  assert.equal('images' in sent.question,false);
+  assert.equal(sent.model,'openai/gpt-oss-120b');
+});
+
+test('hosted image validation rejects missing, oversized and unsafe pixels before transport',async()=>{
+  let calls=0;
+  const client=createHostedClient({endpoint,public:true,fetchImpl:async()=>{calls++;return Response.json(answer);}});
+  for(const images of [null,new Array(1),Array(4).fill(visionImage),[{label:visionImage.label}],[{...visionImage,label:''}],[{...visionImage,url:'data:image/png;base64,AAAA'}],[{...visionImage,url:'https://localhost/chart.png'}],[{...visionImage,url:'data:image/png;base64,'+'A'.repeat(700000)}]]) {
+    await assert.rejects(client.solve({question:{...question,images}}),error=>error.code==='INPUT');
+  }
+  assert.equal(calls,0);
+  const large={...visionImage,url:'data:image/png;base64,'+Buffer.concat([Buffer.from(visionImage.url.split(',')[1],'base64'),Buffer.alloc(30000)]).toString('base64')};
+  await client.solve({question:{...question,images:[large]}});
+  assert.equal(calls,1,'Image bytes have a separate bound from text');
+});
+
+test('hosted visual failures stay explicit and sanitized without another query',async()=>{
+  for(const code of ['IMAGE','MODEL']) {
+    let calls=0;
+    const client=createHostedClient({endpoint,public:true,fetchImpl:async()=>{calls++;return Response.json({error:{code,message:'private provider URL'}},{status:502});}});
+    await assert.rejects(client.solve({question:{...question,images:[visionImage]}}),error=>error.code===code&&/image[mn]/i.test(error.message)&&!error.message.includes('private'));
+    assert.equal(calls,1);
+  }
+});

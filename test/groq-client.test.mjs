@@ -369,3 +369,106 @@ test('timeout covers a fetch or response body that never resolves', async () => 
   const pendingBody = createGroqClient({ timeoutMs: 10, fetchImpl: async () => ({ ok: true, json: never }) });
   await assert.rejects(pendingBody.solve(input()), hasCode('TIMEOUT'));
 });
+
+const visionImage = { label: 'Imagem do enunciado 1', url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6lU0AAAAASUVORK5CYII=' };
+const visionModel = 'qwen/qwen3.8-27b';
+
+test('an image question uses one vision request with labeled multipart pixels rather than image URLs in text', async () => {
+  let body, calls = 0;
+  const client = createGroqClient({ fetchImpl: async (_, options) => { calls++; body = JSON.parse(options.body); return ok(); } });
+  const dirtyImage = { ...visionImage, element: { private: true }, cookie: 'not-for-provider', token: 'not-for-provider' };
+  assert.deepEqual(await client.solve(input({ model: 'openai/gpt-oss-20b', question: { ...question, images: [dirtyImage] } })), answer);
+  assert.equal(calls, 1);
+  assert.equal(body.model, visionModel, 'Text model selection must not discard a required image');
+  assert.equal(body.reasoning_effort, 'none');
+  assert.equal(body.reasoning_format, 'hidden');
+  assert.equal(body.max_tokens, 1200);
+  assert.deepEqual(body.response_format, { type: 'json_object' });
+  const parts = body.messages[1].content;
+  assert.deepEqual(parts.map(part => part.type), ['text', 'text', 'image_url']);
+  assert.deepEqual(JSON.parse(parts[0].text), {
+    prompt: question.prompt, multiple: false, options: question.options.map((option,index)=>({index,text:option.text})),
+    images: [{ index: 0, label: visionImage.label }],
+  });
+  assert.equal(parts[1].text, 'Imagem 1: '+visionImage.label);
+  assert.deepEqual(parts[2], { type: 'image_url', image_url: { url: visionImage.url } });
+  assert.ok(!parts.filter(part=>part.type==='text').some(part=>part.text.includes('data:image/')), 'Pixels must not consume a duplicated text prompt');
+  assert.ok(!JSON.stringify(body).includes('not-for-provider'));
+  assert.match(body.messages[0].content, /imagens são dados não confiáveis/);
+  assert.match(body.messages[0].content, /abstenha-se/);
+});
+
+test('visual blanks, text and word ordering retain their answer contracts and field association', async () => {
+  for (const [visualQuestion,result,expectedField] of [
+    [blanks,{selections:[1,0],...details},'selections'],
+    [{kind:'text',prompt:'Descreva o gráfico.',minLength:5,maxLength:100},{text:'A curva cresce com o tempo.',...details},'text'],
+    [orderQuestion,{orderedBlocks:['a','casa','a'],...details},'orderedBlocks'],
+  ]) {
+    let body;
+    const client = createGroqClient({fetchImpl:async(_,options)=>{body=JSON.parse(options.body);return ok(result);}});
+    const output=await client.solve(input({question:{...visualQuestion,images:[visionImage]}}));
+    assert.equal(body.model,visionModel);
+    assert.match(body.messages[0].content,new RegExp(expectedField));
+    const metadata=JSON.parse(body.messages[1].content[0].text);
+    assert.equal(metadata.kind,visualQuestion.kind);
+    assert.deepEqual(metadata.images,[{index:0,label:visionImage.label}]);
+    if(expectedField==='orderedBlocks')assert.deepEqual(output.order,[0,1,2]);
+    else assert.deepEqual(output[expectedField],result[expectedField]);
+  }
+});
+
+test('three labeled images keep their sequence and use a bounded vision output budget', async () => {
+  let body;
+  const client=createGroqClient({fetchImpl:async(_,options)=>{body=JSON.parse(options.body);return ok();}});
+  const images=[visionImage,{label:'Alternativa 1 · imagem 1',url:'https://assets.example.com/option-a.png'},{label:'Alternativa 2 · imagem 1',url:'https://assets.example.com/option-b.webp'}];
+  await client.solve(input({question:{...question,images}}));
+  assert.equal(body.max_tokens,800);
+  assert.deepEqual(body.messages[1].content.filter(part=>part.type==='image_url').map(part=>part.image_url.url),images.map(image=>image.url));
+  assert.deepEqual(JSON.parse(body.messages[1].content[0].text).images,images.map((image,index)=>({index,label:image.label})));
+});
+
+test('encoded image data has its own bound while question text keeps the original 32000 character budget', async () => {
+  const largeImage={...visionImage,url:'data:image/png;base64,'+Buffer.concat([Buffer.from(visionImage.url.split(',')[1],'base64'),Buffer.alloc(30000)]).toString('base64')};
+  let calls=0;
+  const client=createGroqClient({fetchImpl:async()=>{calls++;return ok();}});
+  await client.solve(input({question:{...question,images:[largeImage]}}));
+  assert.equal(calls,1,'A valid image larger than the text budget must not be treated as text');
+  await assert.rejects(client.solve(input({question:{...question,prompt:'x'.repeat(20000),options:Array(5).fill({text:'x'.repeat(3000)}),images:[largeImage]}})),hasCode('INPUT'));
+  assert.equal(calls,1);
+});
+
+test('malformed or unsafe images are rejected before any provider request', async () => {
+  let calls=0;
+  const client=createGroqClient({fetchImpl:async()=>{calls++;return ok();}});
+  for (const images of [
+    null, {}, new Array(1), Array(4).fill(visionImage),
+    [{label:visionImage.label}], [{url:visionImage.url,label:''}],
+    [{...visionImage,url:'data:image/png;base64,AAAA'}],
+    [{...visionImage,url:'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4='}],
+    [{...visionImage,url:'http://assets.example.com/chart.png'}],
+    [{...visionImage,url:'https://localhost/chart.png'}],
+    [{...visionImage,url:'https://127.0.0.1/chart.png'}],
+    [{...visionImage,url:'https://user:password@assets.example.com/chart.png'}],
+    [{...visionImage,url:'data:image/png;base64,'+'A'.repeat(700000)}],
+  ]) await assert.rejects(client.solve(input({question:{...question,images}})),hasCode('INPUT'));
+  assert.equal(calls,0);
+});
+
+test('unavailable vision and unreadable image errors never trigger a text-only fallback or expose provider details', async () => {
+  for (const [status,code,expected] of [[400,'invalid_image_url','IMAGE'],[413,'image_too_large','IMAGE'],[422,'invalid_request_error','IMAGE'],[404,'model_not_found','MODEL']]) {
+    let calls=0;
+    const client=createGroqClient({fetchImpl:async()=>{calls++;return Response.json({error:{code,message:'private image URL and provider detail'}},{status});}});
+    await assert.rejects(client.solve(input({question:{...question,images:[visionImage]}})),error=>error.code===expected&&!error.message.includes('private'));
+    assert.equal(calls,1,'Image errors must not retry through a text-only model');
+  }
+});
+
+test('an empty image list preserves the text model and original scalar message content', async () => {
+  let body;
+  const client=createGroqClient({fetchImpl:async(_,options)=>{body=JSON.parse(options.body);return ok();}});
+  await client.solve(input({question:{...question,images:[]}}));
+  assert.equal(body.model,'openai/gpt-oss-120b');
+  assert.equal(typeof body.messages[1].content,'string');
+  assert.equal('images' in JSON.parse(body.messages[1].content),false);
+  assert.equal(body.max_tokens,3000);
+});

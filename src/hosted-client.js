@@ -1,4 +1,6 @@
 // Public bookmarks never contain credentials; the Groq key stays on the server.
+import { VISION_MODEL, cleanQuestionImages, questionTextSize } from './image-input.js';
+
 export function createHostedClient({ endpoint, token, public: publicAccess = false, fetchImpl = globalThis.fetch, timeoutMs = 45000 } = {}) {
   let url;
   try { url = new URL(endpoint); } catch { throw new Error('Endereço do servidor inválido. Copie o script novamente no instalador.'); }
@@ -13,6 +15,7 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
     RATE_LIMIT: 'Limite de consultas atingido. Aguarde um pouco e inicie novamente.',
     MODEL: 'Modelo indisponível. Confira o modelo nos ajustes.',
     INPUT: 'Não foi possível ler esta questão. Confira os seletores nos ajustes.',
+    IMAGE: 'Não foi possível ler uma imagem desta questão. Confira se ela carregou e tente novamente.',
     FORMAT: 'O servidor não retornou uma resposta válida. Tente novamente.',
     TIMEOUT: 'A consulta demorou demais. Tente iniciar novamente.',
     ORIGIN: 'Este site não está autorizado a usar o hub hospedado.',
@@ -46,7 +49,9 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
           || !Number.isInteger(minLength) || minLength < 0 || minLength > maxLength) throw failure('INPUT', messages.INPUT);
       clean = { prompt: question.prompt, kind, maxLength, minLength };
     } else throw failure('INPUT', messages.INPUT);
-    if (JSON.stringify(clean).length > 32000) throw failure('INPUT', messages.INPUT);
+    const images = cleanQuestionImages(question.images);
+    if (images?.length) clean.images = images;
+    if (questionTextSize(clean) > 32000) throw failure('INPUT', messages.INPUT);
     return clean;
   }
   function cleanAnswer(answer, question) {
@@ -85,7 +90,8 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
   async function solve({ question, model = 'openai/gpt-oss-120b', signal } = {}) {
     if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
     if (!publicAccess && !token) throw failure('INPUT', messages.INPUT);
-    const data = { question: cleanQuestion(question), model };
+    const clean = cleanQuestion(question);
+    const data = { question: clean, model: clean.images?.length ? VISION_MODEL : model };
     const controller = new AbortController();
     let timedOut = false;
     const abort = () => controller.abort();
@@ -112,13 +118,14 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
         }
         if (response.status === 401 && code === 'AUTH') throw failure('CONFIG', 'O servidor não conseguiu autenticar na Groq. Confira a configuração da integração.');
         if (response.status === 401) throw failure('AUTH', messages.AUTH);
+        if (code === 'MODEL' && clean.images?.length) throw failure('MODEL', 'O modelo de leitura de imagens está indisponível. Tente novamente mais tarde.');
         const knownCode = Object.hasOwn(messages, code);
         throw failure(knownCode ? code : 'API', knownCode ? messages[code] : 'O servidor não conseguiu responder. Tente novamente.');
       }
       return cleanAnswer(answer, data.question);
     } catch (error) {
       if (controller.signal.aborted) throw failure(timedOut ? 'TIMEOUT' : 'ABORTED', timedOut ? messages.TIMEOUT : 'Consulta cancelada.');
-      if (error?.code && ['AUTH', 'UNAUTHORIZED', 'CONFIG', 'RATE_LIMIT', 'MODEL', 'INPUT', 'FORMAT', 'TIMEOUT', 'ORIGIN', 'API'].includes(error.code)) throw error;
+      if (error?.code && ['AUTH', 'UNAUTHORIZED', 'CONFIG', 'RATE_LIMIT', 'MODEL', 'INPUT', 'IMAGE', 'FORMAT', 'TIMEOUT', 'ORIGIN', 'API'].includes(error.code)) throw error;
       throw failure('NETWORK', 'Não foi possível conectar ao servidor. Confira a conexão; a página pode bloquear consultas externas (CSP/CORS).');
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   }
