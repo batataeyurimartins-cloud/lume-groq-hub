@@ -99,6 +99,7 @@ test('real browser preflight accepts Sala telemetry and completes API response â
       window.__LUME_HOSTED_CONFIG__={endpoint,public:true};
     },{endpoint,telemetryHeaders});
     await page.addScriptTag({content:readFileSync(path.join(root,'dist/hub-groq.js'),'utf8')});
+    await page.getByRole('button',{name:'Responder tarefa',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('input[value="4"]').checked&&document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.toasts').textContent.includes('Respostas: 1'));
     assert.deepEqual(network.map(request=>[request.method,request.status]),[['OPTIONS',204],['POST',200]],'The real browser must send a successful preflight before POST');
     const requested=network[0].requestedHeaders.split(',').map(value=>value.trim().toLowerCase());

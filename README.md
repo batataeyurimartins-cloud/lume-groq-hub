@@ -1,12 +1,12 @@
 # Lume · Favorito automático com Groq
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos e monta frases com blocos de palavras, com notificações em cada etapa. Versão **3.3.0**.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos e monta frases com blocos de palavras, com notificações em cada etapa. Versão **3.4.0**.
 
 ## Instalar o bookmarklet
 
 1. Abra **https://lume-groq-hub.vercel.app**.
 2. Exiba a barra de favoritos com `Ctrl+Shift+B` e arraste **Lume automático** para ela.
-3. Abra a atividade na Sala do Futuro, com a sua sessão já conectada, e clique no favorito. O hub inicia automaticamente na própria página.
+3. Abra a atividade na Sala do Futuro, com a sua sessão já conectada, e clique no favorito. O hub abre na própria página. Clique em **Responder tarefa** para começar.
 
 O acesso é público: não exige código de acesso ou chave da Groq do visitante. Se o navegador não permitir arrastar o botão, use **Copiar bookmarklet**, crie um favorito e cole o código no campo de endereço desse favorito.
 
@@ -16,17 +16,18 @@ Após uma atualização, feche o hub no **×** e clique no mesmo favorito para c
 
 ## Uso
 
-- **Pausar automático** interrompe a consulta em andamento e a busca por novas questões.
-- **Iniciar automático** retoma a leitura; questões concluídas não são consultadas novamente na mesma sessão.
-- As notificações mostram **Questão detectada**, **Buscando resposta…**, **Resposta detectada**, **Marcando respostas…** e **Respostas: 1**, **Respostas: 2**, etc. O contador aumenta somente após confirmar a marcação da questão.
+- **Responder tarefa** inicia somente a atividade aberta. Uma notificação no centro superior mostra o nome da tarefa.
+- **Pausar tarefa** interrompe a consulta em andamento. Retomar a mesma tarefa preserva a contagem e as questões já preenchidas.
+- Ao preencher todas as questões, o botão muda para **Tarefa concluída** e fica desativado. Abrir outra atividade zera o contador e aguarda um novo clique; consultas pendentes da tarefa anterior são canceladas.
+- As notificações mostram **Questão detectada**, **Buscando resposta…**, **Resposta detectada**, **Marcando respostas…** e **Respostas: 1**, **Respostas: 2**, etc. O contador pertence à tarefa atual e aumenta somente após confirmar o preenchimento da questão. Isso não indica correção ou nota.
 - Nas lacunas, o hub abre os menus para ler as opções, fecha-os e consulta a Groq uma vez para o conjunto. Depois preenche cada campo, mesmo quando a Sala remove as palavras escolhidas dos outros menus. O contador aumenta uma vez pela questão completa.
 - Nas questões de texto, preenche o campo **Responder** respeitando os limites de caracteres. As notificações mostram **Questão de texto detectada** e **Preenchendo respostas…**.
-- Nos blocos de palavras **CLOUD**, lê o banco completo e clica nos blocos na ordem da frase. Palavras repetidas são preservadas como blocos diferentes. Mostra **Ordenando palavras…** e conta uma resposta após confirmar toda a sequência. **Desfazer** restaura a seleção anterior, inclusive uma frase parcialmente montada.
-- **Desfazer** pausa o automático e restaura a última seleção quando a questão e a seleção continuam iguais.
+- Nos blocos de palavras **CLOUD**, lê o banco completo e clica nos blocos na ordem da frase. Palavras repetidas são preservadas como blocos diferentes. A Groq monta a sequência com os textos dos blocos; o cliente os converte para os índices originais, sem uma segunda consulta. Esse cuidado reduz erros de posição, mas não garante uma resposta correta. Mostra **Ordenando palavras…** e conta uma resposta após confirmar toda a sequência. **Desfazer** restaura a seleção anterior, inclusive uma frase parcialmente montada.
+- **Desfazer** pausa a tarefa e restaura a última seleção quando a questão e a seleção continuam iguais.
 - A engrenagem **Ajustes** permite escolher o modelo e indicar seletores personalizados, se necessário.
 - Arraste o cabeçalho para mover o painel. Use minimizar ou `Alt+Shift+G` para mostrar/ocultar. Fechar cancela as solicitações e remove o hub da página.
 
-O hub acompanha novas questões carregadas enquanto estiver ativo. Não troca páginas nem finaliza a atividade. Sugestões de baixa confiança também são marcadas automaticamente; quando a Groq não indica uma alternativa, a questão é ignorada. A IA pode errar.
+O hub acompanha novas questões da mesma tarefa enquanto estiver ativo. Quando a página informa o total de questões, aguarda todas; sem esse total, usa o conjunto reconhecido após a página estabilizar. Questões ignoradas ou com erro não são anunciadas como tarefa concluída. Não troca páginas nem entrega a atividade. Sugestões de baixa confiança também são marcadas automaticamente; quando a Groq não indica uma alternativa, a questão é ignorada. A IA pode errar.
 
 ## API pública e dados
 

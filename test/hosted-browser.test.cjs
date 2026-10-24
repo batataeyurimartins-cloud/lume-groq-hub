@@ -30,10 +30,11 @@ async function setup({answerFor}={}) {
     catch { /* A canceled request may no longer accept a response. */ }
   });
   await page.goto('http://lume-test.local/demo.html');
+  await page.getByRole('button',{name:'Responder tarefa',exact:true}).click();
   return {page,requests,directCalls:()=>directGroqCalls};
 }
 
-test('hosted bundle automatically uses server bearer transport, marks both question types, and consumes config',async()=>{
+test('hosted task button uses server bearer transport, marks both question types, and consumes config',async()=>{
   const {page,requests,directCalls}=await setup();
   try {
     await page.waitForFunction(()=>document.querySelector('input[name="q1"][value="56"]').checked&&document.querySelector('input[name="q2"][value="7"]').checked);
@@ -53,7 +54,8 @@ test('hosted bundle automatically uses server bearer transport, marks both quest
     assert.equal(await page.evaluate(()=>Object.hasOwn(window,'__LUME_HOSTED_CONFIG__')),false);
     assert.equal(await page.locator('#lume-api-key').inputValue(),'');
     assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
-    await page.getByRole('button',{name:'Pausar automático',exact:true}).click();
+    await page.getByRole('button',{name:'Tarefa concluída',exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:'Tarefa concluída',exact:true}).isDisabled(),true);
   } finally {await page.close();}
 });
 
@@ -70,13 +72,13 @@ test('hosted bundle rejects invalid answer indices and cancellation prevents lat
     assert.equal(await page.locator('input[name="q1"]:checked').count(),0);
     // Invalid provider data pauses the hub. Explicitly restart the failed
     // question, then hold that response so pause can reject its late result.
-    await page.getByRole('button',{name:'Iniciar automático',exact:true}).click();
+    await page.getByRole('button',{name:'Responder tarefa',exact:true}).click();
     const end=Date.now()+5000;
     while(requests.length<2) {
       if(Date.now()>end)throw new Error('The second hosted request did not start');
       await page.waitForTimeout(10);
     }
-    await page.getByRole('button',{name:'Pausar automático',exact:true}).click();
+    await page.getByRole('button',{name:'Pausar tarefa',exact:true}).click();
     release();
     await page.waitForTimeout(250);
     assert.equal(await page.locator('fieldset input:checked').count(),0);

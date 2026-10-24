@@ -141,11 +141,14 @@ async function setup({scriptDelay=0,missingScript=false,activityHtml=simpleActiv
   return {context,installer,activity,href,invoke,requests,bundleCount:()=>bundleRequests,directCount:()=>directGroqCalls};
 }
 
-test('public bookmarklet loads the hosted hub, marks an answer, and leaves the activity open',async()=>{
+test('public bookmarklet opens idle, responds to one task on click, and leaves the activity open',async()=>{
   const fixture=await setup();
   const {activity,requests,invoke}=fixture;
   try {
     await invoke();
+    await activity.getByRole('button',{name:'Responder tarefa',exact:true}).waitFor();
+    assert.equal(requests.length,0,'Opening the bookmark must wait for the task button');
+    await activity.getByRole('button',{name:'Responder tarefa',exact:true}).click();
     await activity.waitForFunction(()=>document.querySelector('input[value="4"]').checked&&document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.toasts').textContent.includes('Respostas: 1'));
     assert.equal(activity.url(),activityUrl);
     assert.equal(fixture.bundleCount(),1);
@@ -168,6 +171,7 @@ test('repeated bookmark clicks while loading share one pending bundle',async()=>
   try {
     await fixture.invoke();
     await fixture.invoke();
+    await fixture.activity.getByRole('button',{name:'Responder tarefa',exact:true}).click();
     await fixture.activity.waitForFunction(()=>document.querySelector('input[value="4"]').checked);
     assert.equal(fixture.bundleCount(),1);
     assert.equal(fixture.requests.length,1);
@@ -195,6 +199,7 @@ test('bookmarklet reads Sala MUI sibling statements and unnamed checkbox groups 
   const {activity,requests}=fixture;
   try {
     await fixture.invoke();
+    await activity.getByRole('button',{name:'Responder tarefa',exact:true}).click();
     await activity.waitForFunction(()=>document.querySelector('#sala-single-card input[value="1"]').checked && document.querySelector('#sala-multi-card input[value="2"]').checked && document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.toasts').textContent.includes('Respostas: 2'));
     assert.equal(requests.length,2,'Adjacent Sala cards must remain two separate questions');
     const single=requests.find(request=>!request.payload.question.multiple)?.payload.question;
@@ -232,6 +237,7 @@ test('bookmarklet answers choice, lazy Sala blanks, and a bounded textarea once 
   try {
     assert.equal(await activity.locator('[role="option"]').count(),0,'Sala select options must initially exist only in a lazy portal');
     await fixture.invoke();
+    await activity.getByRole('button',{name:'Responder tarefa',exact:true}).click();
     await activity.waitForFunction(expected=>{
       const state=window.__salaFixture;
       return document.querySelector('#mixed-choice input[value="1"]').checked &&
@@ -266,7 +272,7 @@ test('bookmarklet answers choice, lazy Sala blanks, and a bounded textarea once 
     assert.equal(await activity.locator('textarea[aria-hidden="true"]').inputValue(),'','The autosize helper must remain untouched');
     assert.equal(await activity.locator('#mixed-text textarea:not([aria-hidden="true"])').getAttribute('maxlength'),null);
     assert.deepEqual(await activity.locator('#mixed-blanks input.MuiSelect-nativeInput').evaluateAll(inputs=>inputs.map(input=>input.value)),['plantas','luz']);
-    await activity.waitForFunction(()=>document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.status-text').textContent.includes('Concluído'));
+    await activity.waitForFunction(()=>document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.status-text').textContent.includes('concluída'));
     await activity.evaluate(()=>{document.querySelector('#text-counter').textContent+=' ';});
     await activity.waitForTimeout(950);
     assert.equal(requests.length,3,'Changed select IDs, selected labels, counters, and hidden limit labels must not cause duplicate answers');
@@ -283,6 +289,7 @@ test('bookmarklet fills and undoes a Sala form with hidden honeypot and no maxim
   const {activity}=fixture;
   try {
     await fixture.invoke();
+    await activity.getByRole('button',{name:'Responder tarefa',exact:true}).click();
     await activity.waitForFunction(expected=>window.__salaFixture.text===expected&&document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.undo').disabled===false,responseText);
     await activity.locator('#lume-groq-hub').locator('.undo').click();
     await activity.waitForFunction(()=>window.__salaFixture.text===''&&document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.toasts').textContent.includes('Respostas: 0'));
@@ -292,7 +299,7 @@ test('bookmarklet fills and undoes a Sala form with hidden honeypot and no maxim
     assert.equal(fixture.requests.length,1);
     assert.equal(fixture.requests[0].payload.question.kind,'text');
     assert.equal(fixture.requests[0].payload.question.maxLength,3000);
-    assert.match(await activity.locator('#lume-groq-hub').locator('.status-text').textContent(),/pausado/i);
+    assert.match(await activity.locator('#lume-groq-hub').locator('.status-text').textContent(),/pausad[ao]/i);
   } finally {await fixture.context.close();}
 });
 
@@ -310,8 +317,9 @@ test('bookmarklet orders real Sala CLOUD Boxes including repeated words once, th
     assert.equal(await activity.locator('#cloud-order-card [role]').count(),0,'The actual CLOUD widget has no invented accessibility roles for its word bank');
     assert.equal(await activity.locator('.MuiChip-root').count(),0,'The actual word controls are plain MuiBox divs');
     await fixture.invoke();
+    await activity.getByRole('button',{name:'Responder tarefa',exact:true}).click();
     await activity.waitForFunction(expected=>JSON.stringify(window.__cloudFixture.selected)===JSON.stringify(expected)&&document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.toasts').textContent.includes('Respostas: 1'),order);
-    await activity.waitForFunction(()=>document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.status-text').textContent.includes('Concluído'));
+    await activity.waitForFunction(()=>document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.status-text').textContent.includes('concluída'));
     assert.equal(requests.length,1);
     assert.deepEqual(beforeAnswer.selected,[],'Reading the word bank must preserve the initial answer');
     assert.deepEqual(beforeAnswer.bankClicks,[]);
@@ -339,6 +347,6 @@ test('bookmarklet orders real Sala CLOUD Boxes including repeated words once, th
     assert.equal(await activity.locator('#cloud-order-card .css-1ydeh3u button').count(),0);
     assert.equal(await bank.evaluateAll(elements=>elements.every(element=>getComputedStyle(element).display!=='none')),true,'Undo must restore the entire bank without navigating or submitting');
     assert.equal(requests.length,1);
-    assert.match(await activity.locator('#lume-groq-hub').locator('.status-text').textContent(),/pausado/i);
+    assert.match(await activity.locator('#lume-groq-hub').locator('.status-text').textContent(),/pausad[ao]/i);
   } finally {await fixture.context.close();}
 });

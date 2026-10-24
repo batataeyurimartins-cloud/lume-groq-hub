@@ -16,7 +16,7 @@ async function waitUntil(predicate, message, timeout=6000) {
   }
 }
 
-async function setup({answerFor} = {}) {
+async function setup({answerFor,total} = {}) {
   const page = await browser.newPage({viewport:{width:1280,height:900}});
   const requests = [];
   await page.route('http://lume-test.local/**', route => {
@@ -33,6 +33,7 @@ async function setup({answerFor} = {}) {
     try { await route.fulfill({headers:{'Access-Control-Allow-Origin':'*'},json:{choices:[{finish_reason:'stop',message:{content:JSON.stringify(answer)}}]}}); } catch { /* Requests intentionally canceled by pause or SPA navigation. */ }
   });
   await page.goto('http://lume-test.local/');
+  if(total)await page.locator('.quiz').evaluate((section,total)=>section.setAttribute('data-question-total',String(total)),total);
   await page.locator('#lume-groq-hub').evaluate(host=>{
     window.__lumeToastHistory=[];
     const record=()=>{
@@ -72,7 +73,8 @@ test('automatic bundle: page → Groq JSON → both native question types → cu
     const panelBounds=await page.locator('#lume-groq-hub').boundingBox();
     assert.ok(panelBounds.x>=0 && panelBounds.x+panelBounds.width<=391,'The compact hub must fit the mobile viewport');
     await page.screenshot({path:path.join(root,'preview-mobile.png'),fullPage:true});
-    await page.getByRole('button',{name:'Pausar automático',exact:true}).click();
+    await page.getByRole('button',{name:'Tarefa concluída',exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:'Tarefa concluída',exact:true}).isDisabled(),true);
     await page.getByRole('button',{name:'Desfazer',exact:true}).click();
     await page.waitForFunction(()=>document.querySelectorAll('input[name="q2"]:checked').length===0);
     assert.equal(await page.locator('input[name="q1"]:checked').getAttribute('value'),'56');
@@ -80,7 +82,7 @@ test('automatic bundle: page → Groq JSON → both native question types → cu
 });
 
 test('automatic watcher solves a newly inserted question and avoids reprocessing completed content',async()=>{
-  const {page,requests}=await setup();
+  const {page,requests}=await setup({total:3});
   try {
     await waitForDemoAnswers(page);
     await page.locator('.quiz').evaluate(section=>{
@@ -134,7 +136,7 @@ test('SPA prompt replacement while Groq is pending never applies the old answer'
     // any native click observed here could only have come from the stale answer.
     await page.waitForTimeout(650);
     assert.equal(await page.locator('fieldset input:checked').count(),0);
-    await page.getByRole('button',{name:'Pausar automático',exact:true}).click();
+    await page.getByRole('button',{name:'Pausar tarefa',exact:true}).click();
     releaseNew();
     await page.waitForTimeout(200);
     assert.equal(await page.locator('fieldset input:checked').count(),0);

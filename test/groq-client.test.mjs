@@ -155,10 +155,57 @@ test('order questions preserve duplicate blocks as distinct indices and send onl
   assert.deepEqual(await client.solve(input({ question: orderQuestion })), result);
   assert.deepEqual(JSON.parse(body.messages[1].content), { kind: 'order', prompt: orderQuestion.prompt, options: [{ index: 0, text: 'a' }, { index: 1, text: 'casa' }, { index: 2, text: 'a' }] });
   assert.match(body.messages[0].content, /kind="order"/);
-  assert.match(body.messages[0].content, /cada índice exatamente uma vez/);
+  assert.match(body.messages[0].content, /orderedBlocks/);
+  assert.match(body.messages[0].content, /cada ocorrência exatamente uma vez/);
+  assert.equal(body.reasoning_effort, 'medium');
   assert.ok(!body.messages[1].content.includes('private'));
   const abstaining = createGroqClient({ fetchImpl: async () => ok({ order: [], ...details }) });
   assert.deepEqual((await abstaining.solve(input({ question: orderQuestion }))).order, []);
+});
+
+test('readable ordered blocks become original indices locally in one request', async () => {
+  const words = ['demanda', 'industriais', 'cadeias', 'as', 'globais', 'por', 'reorganiza', 'terras', 'A', 'raras'];
+  const orderedBlocks = ['A', 'demanda', 'por', 'terras', 'raras', 'reorganiza', 'as', 'cadeias', 'industriais', 'globais'];
+  let calls = 0;
+  const client = createGroqClient({ fetchImpl: async () => { calls++; return ok({ orderedBlocks, ...details }); } });
+  const result = await client.solve(input({ question: { kind: 'order', prompt: 'Ordene os blocos para explicar a relação entre recursos naturais, indústria e território.', options: words.map(text => ({ text })) } }));
+  assert.deepEqual(result, { order: [8, 0, 5, 7, 9, 6, 3, 2, 1, 4], ...details });
+  assert.equal(calls, 1, 'Mapping words must not make a second provider request');
+  assert.equal('orderedBlocks' in result, false, 'The public response contract remains a numeric order');
+});
+
+test('ordered block matching consumes duplicates and keeps multiword blocks, case and punctuation intact', async () => {
+  const options = ['a', 'luz', 'e', 'a', 'água', 'sustentam', 'a vida.'].map(text => ({ text }));
+  const orderedBlocks = ['a', 'água', 'e', 'a', 'luz', 'sustentam', ' a   vida. '];
+  const client = createGroqClient({ fetchImpl: async () => ok({ orderedBlocks, ...details }) });
+  const result = await client.solve(input({ question: { kind: 'order', prompt: 'Ordene.', options } }));
+  assert.deepEqual(result.order, [0, 4, 2, 3, 1, 5, 6]);
+  assert.equal(new Set(result.order).size, options.length);
+  const duplicateIds = createGroqClient({ fetchImpl: async () => ok({ orderedBlocks: ['a', 'casa', 'a'], order: [2, 1, 0], ...details }) });
+  assert.deepEqual((await duplicateIds.solve(input({ question: orderQuestion }))).order, [0, 1, 2], 'Equivalent duplicate occurrences do not contradict the visible sequence');
+  const abstaining = createGroqClient({ fetchImpl: async () => ok({ orderedBlocks: [], ...details }) });
+  assert.deepEqual((await abstaining.solve(input({ question: orderQuestion }))).order, []);
+});
+
+test('invented, omitted, repeated and contradictory ordered blocks are rejected before filling', async () => {
+  for (const result of [
+    { orderedBlocks: ['a', 'casa'], ...details },
+    { orderedBlocks: ['a', 'casa', 'casa'], ...details },
+    { orderedBlocks: ['a', 'casas', 'a'], ...details },
+    { orderedBlocks: ['A', 'casa', 'a'], ...details },
+    { orderedBlocks: ['a', 'casa.', 'a'], ...details },
+    { orderedBlocks: ['a', 1, 'a'], ...details },
+    { orderedBlocks: ['a', '', 'a'], ...details },
+    { orderedBlocks: null, ...details },
+    { orderedBlocks: ['a', 'casa', 'a'], order: [0, 2, 1], ...details },
+    { orderedBlocks: ['a', 'casa', 'a'], order: [0, 1, 1], ...details },
+    { orderedBlocks: ['a', 'casa', 'a'], order: ['0', 1, 2], ...details },
+    { orderedBlocks: ['a', 'casa', 'a'], indices: [], ...details },
+    { orderedBlocks: [], order: [0, 1, 2], ...details },
+  ]) {
+    const client = createGroqClient({ fetchImpl: async () => ok(result) });
+    await assert.rejects(client.solve(input({ question: orderQuestion })), hasCode('FORMAT'));
+  }
 });
 
 test('order output requires a full numeric permutation and rejects mixed answer kinds', async () => {
