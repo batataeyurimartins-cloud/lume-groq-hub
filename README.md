@@ -1,6 +1,6 @@
 # Lume · Favorito automático com Groq
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos, monta frases com blocos de palavras e lê imagens das questões, com notificações em cada etapa. Versão **3.5.0**.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos, monta frases com blocos de palavras e lê imagens das questões, com notificações em cada etapa. Versão **3.6.0**. O painel usa tons de verde grafite e lima, com ícones próprios, estados visuais de execução e conclusão e animações que respeitam a preferência por movimento reduzido.
 
 ## Instalar o bookmarklet
 
