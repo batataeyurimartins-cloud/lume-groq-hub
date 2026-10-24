@@ -1,9 +1,9 @@
 {
-  "name": "lume-groq-console-hub",
-  "version": "3.6.0",
+  "name": "lume-batatahub",
+  "version": "3.7.0",
   "private": true,
   "type": "module",
-  "description": "Hub de questões com Groq, executado pelo console do navegador.",
+  "description": "Lume do BatataHub: hub compacto de questões e imagens.",
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test test/*.test.mjs",

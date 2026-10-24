@@ -1,17 +1,17 @@
-// Public bookmarks never contain credentials; the Groq key stays on the server.
+// Public bookmarks never contain credentials; the provider key stays on the server.
 import { VISION_MODEL, cleanQuestionImages, questionTextSize } from './image-input.js';
 
 export function createHostedClient({ endpoint, token, public: publicAccess = false, fetchImpl = globalThis.fetch, timeoutMs = 45000 } = {}) {
   let url;
   try { url = new URL(endpoint); } catch { throw new Error('Endereço do servidor inválido. Copie o script novamente no instalador.'); }
-  if (url.protocol !== 'https:' || url.pathname !== '/api/solve' || url.username || url.password || url.search || url.hash) {
+  if (url.protocol !== 'https:' || !['/api/solve', '/api/lume/solve'].includes(url.pathname) || url.username || url.password || url.search || url.hash) {
     throw new Error('Endereço do servidor inválido. Copie o script novamente no instalador.');
   }
   function failure(code, message) { return Object.assign(new Error(message), { code }); }
   const messages = {
     AUTH: 'O código de acesso foi recusado. Gere o script novamente no instalador.',
     UNAUTHORIZED: 'O código de acesso foi recusado. Gere o script novamente no instalador.',
-    CONFIG: 'A integração com a Groq ainda não foi configurada no servidor.',
+    CONFIG: 'A integração de IA do BatataHub ainda não foi configurada no servidor.',
     RATE_LIMIT: 'Limite de consultas atingido. Aguarde um pouco e inicie novamente.',
     MODEL: 'Modelo indisponível. Confira o modelo nos ajustes.',
     INPUT: 'Não foi possível ler esta questão. Confira os seletores nos ajustes.',
@@ -116,7 +116,7 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
           if (delay) error.retryAfter = delay;
           throw error;
         }
-        if (response.status === 401 && code === 'AUTH') throw failure('CONFIG', 'O servidor não conseguiu autenticar na Groq. Confira a configuração da integração.');
+        if (response.status === 401 && code === 'AUTH') throw failure('CONFIG', 'O BatataHub não conseguiu autenticar no serviço de IA. Confira a configuração da integração.');
         if (response.status === 401) throw failure('AUTH', messages.AUTH);
         if (code === 'MODEL' && clean.images?.length) throw failure('MODEL', 'O modelo de leitura de imagens está indisponível. Tente novamente mais tarde.');
         const knownCode = Object.hasOwn(messages, code);

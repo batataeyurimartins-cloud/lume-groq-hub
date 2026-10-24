@@ -27,7 +27,7 @@ test('app access failure and upstream Groq auth failure give different recovery 
   const denied=createHostedClient({endpoint,token,fetchImpl:async()=>Response.json({error:{code:'UNAUTHORIZED',message:'private'}},{status:401})});
   await assert.rejects(denied.solve({question}),error=>error.code==='AUTH'&&error.message.includes('código de acesso'));
   const provider=createHostedClient({endpoint,token,fetchImpl:async()=>Response.json({error:{code:'AUTH',message:'private'}},{status:401})});
-  await assert.rejects(provider.solve({question}),error=>error.code==='CONFIG'&&error.message.includes('Groq')&&!error.message.includes('private'));
+  await assert.rejects(provider.solve({question}),error=>error.code==='CONFIG'&&error.message.includes('BatataHub')&&!error.message.includes('private'));
 });
 test('pause aborts the native request and pre-aborted work never uses fetch', async () => {
   let calls=0;
@@ -39,7 +39,7 @@ test('pause aborts the native request and pre-aborted work never uses fetch', as
   assert.equal(calls,1);
 });
 test('transport refuses insecure or redirect-capable endpoint configuration', () => {
-  for (const value of ['http://lume-test/api/solve','https://lume-test/other','https://lume-test/api/solve?target=x']) assert.throws(()=>createHostedClient({endpoint:value,token}));
+  for (const value of ['http://lume-test/api/solve','https://lume-test/other','https://lume-test/api/solve?target=x','https://lume-test/api/lume/solve?target=x','https://lume-test/api/lume/solve#fragment','https://user:password@lume-test/api/lume/solve','https://lume-test/api/lume/other']) assert.throws(()=>createHostedClient({endpoint:value,token}));
 });
 
 test('public bookmark transport needs no token and never sends an old token', async () => {
@@ -229,4 +229,20 @@ test('hosted visual failures stay explicit and sanitized without another query',
     await assert.rejects(client.solve({question:{...question,images:[visionImage]}}),error=>error.code===code&&/image[mn]/i.test(error.message)&&!error.message.includes('private'));
     assert.equal(calls,1);
   }
+});
+
+
+test('the BatataHub canonical API alias uses the same strict public question transport', async () => {
+  const canonical = 'https://batata-hub.vercel.app/api/lume/solve';
+  let request;
+  const client = createHostedClient({ endpoint: canonical, public: true, fetchImpl: async (url, options) => {
+    request = { url, options };
+    return Response.json(answer);
+  } });
+  assert.deepEqual(await client.solve({ question }), answer);
+  assert.equal(request.url, canonical);
+  assert.equal(request.options.credentials, 'omit');
+  assert.equal(request.options.redirect, 'error');
+  assert.equal(request.options.headers.Authorization, undefined);
+  assert.deepEqual(Object.keys(JSON.parse(request.options.body)).sort(), ['model', 'question']);
 });

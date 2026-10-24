@@ -133,6 +133,21 @@ test('trusted Vercel hosts and explicitly configured exact origins are allowed w
   }
 });
 
+test('the BatataHub installation origin is trusted exactly and configured origins keep precedence',async()=>{
+  const handler=createSolveHandler({env:{...env,PUBLIC_HUB:'true'},client:defaultClient});
+  for(const value of [origin,'https://batata-hub.vercel.app']){
+    const {res}=await invoke({handler,headers:{origin:value,authorization:''}});
+    assert.equal(res.statusCode,200);
+    assert.equal(res.headers['access-control-allow-origin'],value);
+  }
+  for(const value of ['http://batata-hub.vercel.app','https://sub.batata-hub.vercel.app','https://batata-hub.vercel.app.evil.example']){
+    const {res}=await invoke({handler,headers:{origin:value,authorization:''}});
+    assert.equal(res.statusCode,403);
+  }
+  const configured=createSolveHandler({env:{...env,PUBLIC_HUB:'true',ALLOWED_ORIGINS:origin},client:defaultClient});
+  assert.equal((await invoke({handler:configured,headers:{origin:'https://batata-hub.vercel.app',authorization:''}})).res.statusCode,403);
+});
+
 test('missing server secrets and invalid configured model fail with sanitized configuration errors',async()=>{
   for (const overrides of [{GROQ_API_KEY:''},{HUB_ACCESS_TOKEN:''},{GROQ_MODEL:'arbitrary/provider'}]) {
     const handler=createSolveHandler({env:{...env,...overrides},client:defaultClient});

@@ -5,6 +5,9 @@
   "outputDirectory": "dist",
   "installCommand": "npm ci --omit=dev --ignore-scripts",
   "functions": { "api/solve.js": { "maxDuration": 60 } },
+  "rewrites": [
+    { "source": "/api/lume/solve", "destination": "/api/solve" }
+  ],
   "headers": [
     { "source": "/(.*)", "headers": [
       { "key": "Referrer-Policy", "value": "no-referrer" },
@@ -12,6 +15,7 @@
       { "key": "X-Frame-Options", "value": "DENY" }
     ] },
     { "source": "/hub-groq.js", "headers": [{ "key": "Cache-Control", "value": "no-store" }] },
+    { "source": "/hub.js", "headers": [{ "key": "Cache-Control", "value": "no-store" }] },
     { "source": "/bookmarklet.js", "headers": [
       { "key": "Cache-Control", "value": "no-store" },
       { "key": "Access-Control-Allow-Origin", "value": "*" }

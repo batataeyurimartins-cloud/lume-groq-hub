@@ -7,6 +7,7 @@ const MAX_TEXT_BODY_BYTES = 48 * 1024;
 const MAX_BODY_BYTES = 3 * 1024 * 1024;
 const MODELS = new Set(['openai/gpt-oss-120b', 'openai/gpt-oss-20b', VISION_MODEL]);
 const DEFAULT_ORIGIN = 'https://saladofuturo.educacao.sp.gov.br';
+const BATATAHUB_ORIGIN = 'https://batata-hub.vercel.app';
 // Sala's Application Insights fetch wrapper can add distributed-tracing
 // headers. Accept those names without granting access to additional origins.
 const CORS_HEADERS = ['Authorization', 'Content-Type', 'Request-Id', 'Request-Context', 'Traceparent', 'Tracestate', 'Baggage'];
@@ -33,7 +34,7 @@ function originValue(value) {
 
 function allowedOrigins(env) {
   const configured = typeof env.ALLOWED_ORIGINS === 'string' && env.ALLOWED_ORIGINS.trim();
-  const origins = new Set((configured ? configured.split(',') : [DEFAULT_ORIGIN])
+  const origins = new Set((configured ? configured.split(',') : [DEFAULT_ORIGIN, BATATAHUB_ORIGIN])
     .map(value => originValue(value.trim())).filter(Boolean));
   for (const key of ['VERCEL_URL', 'VERCEL_PROJECT_PRODUCTION_URL']) {
     const hostname = env[key];
@@ -266,17 +267,17 @@ function publicFailure(error) {
     return { status: error.status, code: error.code, message: error.message };
   }
   const known = {
-    AUTH: [401, 'O serviço não conseguiu autenticar na Groq. Verifique a configuração do servidor.'],
+    AUTH: [401, 'O BatataHub não conseguiu autenticar no serviço de IA. Verifique a configuração do servidor.'],
     RATE_LIMIT: [429, 'Limite de consultas atingido. Aguarde um pouco e tente novamente.'],
-    TIMEOUT: [504, 'A Groq demorou demais para responder. Tente novamente.'],
-    NETWORK: [502, 'O serviço não conseguiu conectar à Groq. Tente novamente.'],
-    FORMAT: [502, 'A Groq retornou uma resposta inválida. Nenhuma alternativa foi marcada.'],
+    TIMEOUT: [504, 'O BatataHub demorou demais para responder. Tente novamente.'],
+    NETWORK: [502, 'O BatataHub não conseguiu conectar ao serviço de IA. Tente novamente.'],
+    FORMAT: [502, 'O serviço de IA retornou uma resposta inválida. Nenhuma alternativa foi marcada.'],
     INPUT: [400, 'A questão enviada não pôde ser processada. Confira o enunciado e as alternativas.'],
     IMAGE: [422, 'Não foi possível ler as imagens desta questão. Confira se elas carregaram e tente novamente.'],
     MODEL: [400, 'O modelo selecionado está indisponível. Tente o outro modelo permitido.'],
     ABORTED: [408, 'Consulta cancelada.'],
   };
-  const [status, message] = known[error?.code] || [502, 'Não foi possível consultar a Groq. Tente novamente.'];
+  const [status, message] = known[error?.code] || [502, 'Não foi possível consultar o serviço de IA do BatataHub. Tente novamente.'];
   const retryAfter = error?.code === 'RATE_LIMIT' && Number.isFinite(error.retryAfter) && error.retryAfter > 0
     ? Math.min(86400, Math.ceil(error.retryAfter)) : undefined;
   return { status, code: known[error?.code] ? error.code : 'API', message, retryAfter };

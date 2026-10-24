@@ -1,5 +1,7 @@
 (() => {
   'use strict';
+  const assetBase = new URL('./', document.currentScript?.src || document.baseURI);
+  const apiEndpoint = new URL('/api/lume/solve', assetBase).href;
   const bookmarkletLink = document.querySelector('#bookmarklet-link');
   const copyBookmarklet = document.querySelector('#copy-bookmarklet');
   const downloadBookmark = document.querySelector('#download-bookmark');
@@ -15,7 +17,7 @@
   if (new URLSearchParams(location.hash.slice(1)).has('token')) {
     history.replaceState(history.state, '', location.pathname + location.search);
   }
-  const loaderUrl = new URL('/bookmarklet.js', location.origin).href;
+  const loaderUrl = new URL('bookmarklet.js', assetBase).href;
   const blockedMessage = 'O site bloqueou o Lume. Use a opção “Usar pelo console” no instalador.';
   const bookmarklet = 'javascript:void(function(){' +
     'var w=window,d=document,h=w.__LUME_GROQ_HUB__;' +
@@ -67,7 +69,7 @@
     }
   }
   async function publicScript() {
-    const response = await fetch('/hub-groq.js', {
+    const response = await fetch(new URL('hub.js', assetBase).href, {
       method: 'GET', cache: 'no-store', credentials: 'same-origin',
       headers: { 'Cache-Control': 'no-cache' },
     });
@@ -76,7 +78,7 @@
     if (!raw.trim() || raw.length > 500000 || /text\/html/i.test(response.headers.get('content-type') || '') || /^\s*</.test(raw)) {
       throw new Error('O arquivo do hub ainda não está disponível. Atualize a página e tente novamente.');
     }
-    const config = { endpoint: `${location.origin}/api/solve`, public: true };
+    const config = { endpoint: apiEndpoint, public: true };
     return `/* Lume público · Execute na página da atividade. */\nwindow.__LUME_HOSTED_CONFIG__ = ${JSON.stringify(config)};\n${raw}\n`;
   }
   function download(content, filename, type) {

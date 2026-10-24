@@ -1,4 +1,4 @@
-// Shared wire validation. Images are forwarded to Groq, never fetched by the API.
+// Shared wire validation. Images are forwarded to the AI provider, never fetched by the API.
 export const VISION_MODEL = 'qwen/qwen3.8-27b';
 export const MAX_QUESTION_IMAGES = 3;
 export const MAX_IMAGE_URL_CHARS = 700000;

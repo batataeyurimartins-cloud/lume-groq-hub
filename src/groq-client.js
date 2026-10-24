@@ -18,10 +18,10 @@ export function createGroqClient({
 
   function validateInput(apiKey, model, question) {
     if (typeof apiKey !== 'string' || !apiKey.trim() || /\s/.test(apiKey.trim()) || apiKey.length > 512) {
-      throw failure('AUTH', 'Informe uma chave válida da Groq nas configurações.');
+      throw failure('AUTH', 'Informe uma chave de API válida nas configurações.');
     }
     if (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}$/.test(model)) {
-      throw failure('MODEL', 'Informe o identificador do modelo disponível na sua conta Groq.');
+      throw failure('MODEL', 'Informe o identificador de um modelo disponível na sua conta.');
     }
     if (!question || typeof question !== 'object' || Array.isArray(question)
         || typeof question.prompt !== 'string' || !question.prompt.trim()) {
@@ -75,7 +75,7 @@ export function createGroqClient({
 
   function validateAnswer(raw, question) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      throw failure('FORMAT', 'A Groq devolveu uma resposta inválida. Tente novamente.');
+      throw failure('FORMAT', 'O BatataHub recebeu uma resposta inválida. Tente novamente.');
     }
     if (typeof raw.explanation !== 'string' || !raw.explanation.trim() || raw.explanation.length > 3000
         || !['high', 'medium', 'low'].includes(raw.confidence)) {
@@ -171,7 +171,7 @@ export function createGroqClient({
     const controller = new AbortController();
     let timedOut = false;
     const abortError = () => failure(timedOut ? 'TIMEOUT' : 'ABORTED', timedOut
-      ? 'A Groq demorou mais de 35 segundos. Tente novamente.' : 'Consulta cancelada.');
+      ? 'O BatataHub demorou mais de 35 segundos. Tente novamente.' : 'Consulta cancelada.');
     const forwardAbort = () => controller.abort();
     signal?.addEventListener('abort', forwardAbort, { once: true });
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
@@ -206,28 +206,28 @@ export function createGroqClient({
         }
       }
       if (response.status === 401 || response.status === 403 || code === 'invalid_api_key') {
-        return failure('AUTH', 'A Groq recusou a chave ou o acesso. Confira sua chave e as permissões da conta.');
+        return failure('AUTH', 'O serviço de IA recusou a chave ou o acesso. Confira sua chave e as permissões da conta.');
       }
       if (response.status === 404 || /model_(not_found|decommissioned|permission)/i.test(code)) {
-        return failure('MODEL', vision ? 'O modelo de leitura de imagens está indisponível na sua conta Groq. Tente novamente mais tarde.' : 'Modelo indisponível. Escolha nas configurações um modelo ativo na sua conta Groq.');
+        return failure('MODEL', vision ? 'O modelo de leitura de imagens está indisponível neste momento. Tente novamente mais tarde.' : 'Modelo indisponível. Escolha nas configurações um modelo ativo na sua conta.');
       }
       if (response.status === 429) {
-        const error = failure('RATE_LIMIT', 'Limite da Groq atingido. Aguarde um pouco e tente novamente.');
+        const error = failure('RATE_LIMIT', 'Limite de consultas do BatataHub atingido. Aguarde um pouco e tente novamente.');
         const delay = retryAfter(response);
         if (delay.seconds !== undefined) error.retryAfter = delay.seconds;
         return error;
       }
       if (vision && ([400, 413, 422].includes(response.status) || /image/i.test(code))) {
-        return failure('IMAGE', 'A Groq não conseguiu ler uma imagem desta questão. Confira se ela carregou e tente novamente.');
+        return failure('IMAGE', 'O BatataHub não conseguiu ler uma imagem desta questão. Confira se ela carregou e tente novamente.');
       }
-      if (response.status === 413) return failure('INPUT', 'A Groq recusou o tamanho da questão. Reduza o texto capturado.');
+      if (response.status === 413) return failure('INPUT', 'Esta questão excede o tamanho permitido pelo serviço de IA. Reduza o texto capturado.');
       if (response.status >= 500) {
-        const error = failure('API', 'A Groq está temporariamente indisponível. Tente novamente em instantes.');
+        const error = failure('API', 'O serviço de IA está temporariamente indisponível. Tente novamente em instantes.');
         const delay = retryAfter(response);
         if (delay.seconds !== undefined) error.retryAfter = delay.seconds;
         return error;
       }
-      return failure('API', `A Groq recusou a consulta (HTTP ${response.status}). Confira o modelo e tente novamente.`);
+      return failure('API', `O serviço de IA recusou a consulta (HTTP ${response.status}). Confira o modelo e tente novamente.`);
     }
 
     try {
@@ -288,7 +288,7 @@ export function createGroqClient({
       try { envelope = await interruptible(response.json()); }
       catch (error) {
         if (controller.signal.aborted) throw abortError();
-        throw failure('FORMAT', 'A Groq retornou dados que não puderam ser lidos. Tente novamente.');
+        throw failure('FORMAT', 'O BatataHub recebeu dados que não puderam ser lidos. Tente novamente.');
       }
       const choice = envelope?.choices?.[0];
       if (choice?.finish_reason !== 'stop' || typeof choice?.message?.content !== 'string' || choice.message.content.length > 16000) {
@@ -296,12 +296,12 @@ export function createGroqClient({
       }
       let answer;
       try { answer = JSON.parse(choice.message.content); }
-      catch { throw failure('FORMAT', 'A Groq não retornou o JSON esperado. Tente novamente.'); }
+      catch { throw failure('FORMAT', 'O BatataHub recebeu uma resposta fora do formato esperado. Tente novamente.'); }
       return validateAnswer(answer, data);
     } catch (error) {
       if (controller.signal.aborted) throw abortError();
       if (error?.code && ['AUTH', 'RATE_LIMIT', 'NETWORK', 'FORMAT', 'ABORTED', 'TIMEOUT', 'MODEL', 'INPUT', 'IMAGE', 'API'].includes(error.code)) throw error;
-      throw failure('NETWORK', 'Não foi possível conectar à Groq. Confira a conexão; este site pode bloquear consultas externas (CSP/CORS).');
+      throw failure('NETWORK', 'Não foi possível conectar ao serviço de IA. Confira a conexão; este site pode bloquear consultas externas (CSP/CORS).');
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', forwardAbort);

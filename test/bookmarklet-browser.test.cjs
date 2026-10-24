@@ -109,7 +109,7 @@ async function setup({scriptDelay=0,missingScript=false,activityHtml=simpleActiv
   await context.route('https://api.groq.com/**',route=>{directGroqCalls++;return route.abort('blockedbyclient');});
   await context.route(`${publicOrigin}/**`,async route=>{
     const resource=new URL(route.request().url()).pathname;
-    if(resource==='/api/solve') {
+    if(resource==='/api/lume/solve') {
       if(route.request().method()==='OPTIONS')return route.fulfill({status:204,headers:{'Access-Control-Allow-Origin':new URL(activityUrl).origin,'Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'content-type'}});
       requests.push({authorization:route.request().headers().authorization,payload:route.request().postDataJSON()});
       const question=requests[requests.length-1].payload.question;
@@ -122,7 +122,7 @@ async function setup({scriptDelay=0,missingScript=false,activityHtml=simpleActiv
       if(missingScript)return route.fulfill({status:404,body:'Not found'});
     }
     const filename=resource==='/'?'index.html':resource.slice(1);
-    if(!['index.html','install.js','style.css','hub-groq.js','bookmarklet.js'].includes(filename))return route.fulfill({status:404,body:'Not found'});
+    if(!['index.html','install.js','style.css','hub.js','hub-groq.js','bookmarklet.js'].includes(filename))return route.fulfill({status:404,body:'Not found'});
     return route.fulfill({contentType:filename.endsWith('.js')?'application/javascript':filename.endsWith('.css')?'text/css':'text/html',body:readFileSync(path.join(root,'dist',filename),'utf8')});
   });
   await context.route(activityUrl,route=>route.fulfill({contentType:'text/html; charset=utf-8',headers:{'Content-Security-Policy':"form-action 'self'; base-uri 'self'; object-src 'none'; frame-ancestors *.educacao.sp.gov.br *.ip.tv; upgrade-insecure-requests"},body:activityHtml}));

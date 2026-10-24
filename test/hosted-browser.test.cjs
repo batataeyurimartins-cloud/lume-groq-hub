@@ -16,8 +16,8 @@ async function setup({answerFor}={}) {
   let directGroqCalls=0;
   await page.addInitScript(({endpoint,token})=>{window.__LUME_HOSTED_CONFIG__={endpoint,token};},{endpoint,token});
   await page.route('http://lume-test.local/**',route=>{
-    const script=route.request().url().endsWith('hub-groq.js');
-    return route.fulfill({contentType:script?'application/javascript':'text/html',body:readFileSync(path.join(root,'dist',script?'hub-groq.js':'demo.html'),'utf8')});
+    const script=route.request().url().match(/\/(?:hub|hub-groq)\.js$/);
+    return route.fulfill({contentType:script?'application/javascript':'text/html',body:readFileSync(path.join(root,'dist',script?'hub.js':'demo.html'),'utf8')});
   });
   await page.route('https://api.groq.com/**',route=>{directGroqCalls++;return route.abort('blockedbyclient');});
   await page.route(endpoint,async route=>{

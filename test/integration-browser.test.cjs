@@ -20,8 +20,8 @@ async function setup({answerFor,total} = {}) {
   const page = await browser.newPage({viewport:{width:1280,height:900}});
   const requests = [];
   await page.route('http://lume-test.local/**', route => {
-    const script = route.request().url().endsWith('hub-groq.js');
-    return route.fulfill({contentType:script ? 'application/javascript' : 'text/html',body:readFileSync(path.join(root, 'dist', script ? 'hub-groq.js' : 'demo.html'), 'utf8')});
+    const script = route.request().url().match(/\/(?:hub|hub-groq)\.js$/);
+    return route.fulfill({contentType:script ? 'application/javascript' : 'text/html',body:readFileSync(path.join(root, 'dist', script ? 'hub.js' : 'demo.html'), 'utf8')});
   });
   await page.route('https://api.groq.com/**', async route => {
     if (route.request().method() === 'OPTIONS') return route.fulfill({status:204,headers:{'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization,content-type'}});

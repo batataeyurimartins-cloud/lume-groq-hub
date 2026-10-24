@@ -13,7 +13,7 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function setup({ fragment = '', clipboardFails = false, bundleStatus = 200, loaderStatus = 200, loaderDelay = 0 } = {}) {
+async function setup({ fragment = '', clipboardFails = false, bundleStatus = 200, loaderStatus = 200, loaderDelay = 0, assetPrefix = '/', pagePath = '/' } = {}) {
   const page = await browser.newPage({ acceptDownloads: true, viewport: { width: 1200, height: 880 } });
   page.setDefaultTimeout(4000);
   const requests = [];
@@ -21,18 +21,20 @@ async function setup({ fragment = '', clipboardFails = false, bundleStatus = 200
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     requests.push({ url: request.url(), pathname, headers: request.headers() });
-    if (pathname === '/hub-groq.js') {
+    if (pathname === `${assetPrefix}hub.js`) {
       await route.fulfill({ status: bundleStatus, contentType: 'text/javascript', body: rawBundle });
       return;
     }
-    if (pathname === '/bookmarklet.js') {
+    if (pathname === `${assetPrefix}bookmarklet.js`) {
       if (loaderDelay) await new Promise(resolve => setTimeout(resolve, loaderDelay));
       await route.fulfill({ status: loaderStatus, contentType: 'text/javascript', body: loaderBundle });
       return;
     }
-    const filename = { '/': 'index.html', '/install.js': 'install.js', '/style.css': 'style.css' }[pathname];
+    const filename = { [pagePath]: 'index.html', [`${assetPrefix}install.js`]: 'install.js', [`${assetPrefix}style.css`]: 'style.css' }[pathname];
     if (!filename) { await route.fulfill({ status: 404, body: '' }); return; }
-    await route.fulfill({ contentType: filename.endsWith('.css') ? 'text/css' : filename.endsWith('.js') ? 'text/javascript' : 'text/html', body: await readFile(path.join(site, filename), 'utf8') });
+    let body = await readFile(path.join(site, filename), 'utf8');
+    if (filename === 'index.html') body = body.replace(/href="(?:\.\/|\/)style\.css"/, `href="${assetPrefix}style.css"`).replace(/src="(?:\.\/|\/)install\.js"/, `src="${assetPrefix}install.js"`);
+    await route.fulfill({ contentType: filename.endsWith('.css') ? 'text/css' : filename.endsWith('.js') ? 'text/javascript' : 'text/html', body });
   });
   await page.addInitScript(({ clipboardFails }) => {
     window.installerTest = { copied: '', storageWrites: 0, loaded: 0, focused: 0 };
@@ -46,7 +48,7 @@ async function setup({ fragment = '', clipboardFails = false, bundleStatus = 200
       } },
     });
   }, { clipboardFails });
-  await page.goto(`https://installer.test/${fragment}`);
+  await page.goto(`https://installer.test${pagePath}${fragment}`);
   await page.locator('#bookmarklet-link').waitFor();
   return { page, requests };
 }
@@ -73,7 +75,7 @@ test('public installer needs no access fields, discards legacy token and offers 
     await page.waitForFunction(() => window.installerTest.copied.startsWith('javascript:'));
     assert.equal(await page.evaluate(() => window.installerTest.copied), `javascript:${code}`);
     assert.equal(await page.evaluate(() => window.installerTest.storageWrites), 0);
-    assert.equal(requests.filter(request => ['/hub-groq.js', '/api/solve'].includes(request.pathname)).length, 0);
+    assert.equal(requests.filter(request => ['/hub.js', '/api/lume/solve'].includes(request.pathname)).length, 0);
   } finally { await page.close(); }
 });
 
@@ -125,11 +127,11 @@ test('console fallback copies public backend configuration with a fresh bundle a
     await page.waitForFunction(() => window.installerTest.copied.includes('__LUME_HOSTED_CONFIG__'));
     const copied = await page.evaluate(() => window.installerTest.copied);
     const config = JSON.parse(copied.match(/window\.__LUME_HOSTED_CONFIG__ = (.+);/)[1]);
-    assert.deepEqual(config, { endpoint: 'https://installer.test/api/solve', public: true });
+    assert.deepEqual(config, { endpoint: 'https://installer.test/api/lume/solve', public: true });
     assert.ok(copied.includes(rawBundle));
     assert.ok(!Object.hasOwn(config, 'token'));
-    assert.equal(requests.find(request => request.pathname === '/hub-groq.js').headers['cache-control'], 'no-cache');
-    assert.equal(requests.filter(request => request.pathname === '/api/solve').length, 0);
+    assert.equal(requests.find(request => request.pathname === '/hub.js').headers['cache-control'], 'no-cache');
+    assert.equal(requests.filter(request => request.pathname === '/api/lume/solve').length, 0);
     assert.equal(await page.evaluate(() => window.installerTest.storageWrites), 0);
   } finally { await page.close(); }
 });
@@ -165,5 +167,34 @@ test('downloaded Netscape bookmarks file contains the real bookmarklet and mobil
     await page.setViewportSize({ width: 360, height: 780 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     assert.equal(await page.locator('#bookmarklet-link').isVisible(), true);
+  } finally { await page.close(); }
+});
+
+
+test('BatataHub installer resolves nested script assets while keeping its API at the origin root', async () => {
+  const prefix = '/scripts/lume/';
+  const { page, requests } = await setup({ assetPrefix: prefix, pagePath: '/lume.html' });
+  try {
+    assert.equal(new URL(page.url()).pathname, '/lume.html');
+    const code = await bookmarkletCode(page);
+    assert.ok(code.includes('https://installer.test/scripts/lume/bookmarklet.js'));
+    assert.ok(!code.includes('https://installer.test/bookmarklet.js'));
+    assert.equal(requests.some(request => request.pathname.startsWith('/api/')), false);
+    await page.evaluate(code);
+    await page.waitForFunction(() => window.installerTest.loaded === 1);
+    assert.equal(requests.filter(request => request.pathname === `${prefix}bookmarklet.js`).length, 1);
+    await page.getByText('Usar pelo console', { exact: true }).click();
+    await page.getByRole('button', { name: 'Copiar script para o console', exact: true }).click();
+    await page.waitForFunction(() => window.installerTest.copied.includes('__LUME_HOSTED_CONFIG__'));
+    const copied = await page.evaluate(() => window.installerTest.copied);
+    const config = JSON.parse(copied.match(/window\.__LUME_HOSTED_CONFIG__ = (.+);/)[1]);
+    assert.deepEqual(config, { endpoint: 'https://installer.test/api/lume/solve', public: true });
+    assert.ok(copied.includes(rawBundle));
+    const bundleRequests = requests.filter(request => request.pathname.endsWith('/hub.js'));
+    assert.equal(bundleRequests.length, 1);
+    assert.equal(bundleRequests[0].pathname, `${prefix}hub.js`);
+    assert.equal(bundleRequests[0].headers['cache-control'], 'no-cache');
+    assert.equal(requests.some(request => request.pathname.startsWith('/api/')), false);
+    assert.equal(await page.evaluate(() => window.installerTest.storageWrites), 0);
   } finally { await page.close(); }
 });
