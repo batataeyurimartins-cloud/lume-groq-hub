@@ -63,3 +63,71 @@ test('rate limiting reports the wait time without retrying or trusting provider 
   const invalid=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json({error:{code:'RATE_LIMIT'}},{status:429,headers:{'Retry-After':'invalid'}})});
   await assert.rejects(invalid.solve({question}),error=>error.code==='RATE_LIMIT'&&error.retryAfter===undefined);
 });
+
+const blanks={kind:'blanks',prompt:'Complete [Lacuna 1] e [Lacuna 2].',fields:[
+  {label:'Variação',element:{private:true},options:[{text:'4',value:'private-value'},{text:'8'}]},
+  {label:'Tempo',options:[{text:'2'},{text:'4'}]},
+]};
+const details={explanation:'Justificativa que não pertence aos campos.',confidence:'high'};
+
+test('hosted blank payload excludes DOM and values, and preserves positional selections',async()=>{
+  let sent;
+  const client=createHostedClient({endpoint,public:true,fetchImpl:async(_,options)=>{
+    sent=JSON.parse(options.body);
+    return Response.json({selections:[1,0],...details,notes:'ignored metadata'});
+  }});
+  assert.deepEqual(await client.solve({question:blanks}),{selections:[1,0],...details});
+  assert.deepEqual(sent.question,{kind:'blanks',prompt:blanks.prompt,fields:blanks.fields.map(field=>({label:field.label,options:field.options.map(option=>({text:option.text}))}))});
+  assert.ok(!JSON.stringify(sent).includes('private'));
+  const repeated=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json({selections:[1,1],...details})});
+  assert.deepEqual((await repeated.solve({question:blanks})).selections,[1,1]);
+  const abstaining=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json({selections:[],...details})});
+  assert.deepEqual((await abstaining.solve({question:blanks})).selections,[]);
+  const remaining=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json({selections:[0],...details})});
+  assert.deepEqual((await remaining.solve({question:{...blanks,fields:[{label:'',options:[{text:'8'}]}]}})).selections,[0]);
+});
+
+test('hosted blank validation blocks partial, wrong-type and mismatched field answers',async()=>{
+  for(const result of [
+    {selections:[1],...details},{selections:[2,0],...details},{selections:[0,-1],...details},
+    {selections:['1',0],...details},{selections:[0.5,0],...details},{selections:[0,0,0],...details},
+    {indices:[1],...details},{selections:[1,0],text:'wrong-kind',...details},
+  ]){
+    const client=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json(result)});
+    await assert.rejects(client.solve({question:blanks}),error=>error.code==='FORMAT');
+  }
+});
+
+test('hosted text transport validates field limits and returns only the answer text and metadata',async()=>{
+  let sent;
+  const textQuestion={kind:'text',prompt:'Explique distância e deslocamento.',minLength:5,maxLength:100,element:{private:true},options:[],value:'draft'};
+  const client=createHostedClient({endpoint,public:true,fetchImpl:async(_,options)=>{
+    sent=JSON.parse(options.body);
+    return Response.json({text:'  Distância mede o caminho.  ',...details,notes:'ignored'});
+  }});
+  assert.deepEqual(await client.solve({question:textQuestion}),{text:'Distância mede o caminho.',...details});
+  assert.deepEqual(sent.question,{kind:'text',prompt:textQuestion.prompt,minLength:5,maxLength:100});
+  const abstaining=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json({text:'  ',...details})});
+  assert.equal((await abstaining.solve({question:textQuestion})).text,'');
+  for(const result of [{text:'abc',...details},{text:'x'.repeat(101),...details},{text:4,...details},{indices:[],...details},{text:'Resposta válida',selections:[0],...details}]){
+    const invalid=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json(result)});
+    await assert.rejects(invalid.solve({question:textQuestion}),error=>error.code==='FORMAT');
+  }
+});
+
+test('hosted validation rejects malformed field inputs before network and keeps choice payload compatible',async()=>{
+  let calls=0,sent;
+  const client=createHostedClient({endpoint,public:true,fetchImpl:async(_,options)=>{calls++;sent=JSON.parse(options.body);return Response.json(answer);}});
+  for(const invalidQuestion of [
+    {...blanks,fields:[]},{...blanks,fields:[{label:'x',options:[]}]},
+    {...blanks,fields:[{label:'x'.repeat(1001),options:blanks.fields[0].options}]},
+    {...blanks,fields:Array(21).fill(blanks.fields[0])},{...blanks,fields:new Array(1)},
+    {kind:'text',prompt:'Explique.',maxLength:8001},{kind:'text',prompt:'Explique.',maxLength:5,minLength:6},
+    {kind:'text',prompt:'Explique.',minLength:-1},{kind:'unknown',prompt:'Explique.'},
+    {kind:'text',prompt:'Explique.',maxLength:null},{...question,kind:null},
+  ])await assert.rejects(client.solve({question:invalidQuestion}),error=>error.code==='INPUT');
+  assert.equal(calls,0);
+  await client.solve({question:{...question,kind:'choice'}});
+  assert.equal(sent.question.kind,undefined);
+  assert.deepEqual(sent.question.options,[{text:'3'},{text:'4'}]);
+});

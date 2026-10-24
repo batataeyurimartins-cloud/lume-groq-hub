@@ -1,6 +1,6 @@
 # Lume · Favorito automático com Groq
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê, responde e marca as alternativas, com notificações em cada etapa. Versão **3.1.2**.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê as questões, marca alternativas e preenche lacunas e respostas de texto, com notificações em cada etapa. Versão **3.2.0**.
 
 ## Instalar o bookmarklet
 
@@ -19,6 +19,8 @@ Após uma atualização, feche o hub no **×** e clique no mesmo favorito para c
 - **Pausar automático** interrompe a consulta em andamento e a busca por novas questões.
 - **Iniciar automático** retoma a leitura; questões concluídas não são consultadas novamente na mesma sessão.
 - As notificações mostram **Questão detectada**, **Buscando resposta…**, **Resposta detectada**, **Marcando respostas…** e **Respostas: 1**, **Respostas: 2**, etc. O contador aumenta somente após confirmar a marcação da questão.
+- Nas lacunas, o hub abre os menus para ler as opções, fecha-os e consulta a Groq uma vez para o conjunto. Depois preenche cada campo, mesmo quando a Sala remove as palavras escolhidas dos outros menus. O contador aumenta uma vez pela questão completa.
+- Nas questões de texto, preenche o campo **Responder** respeitando os limites de caracteres. As notificações mostram **Questão de texto detectada** e **Preenchendo respostas…**.
 - **Desfazer** pausa o automático e restaura a última seleção quando a questão e a seleção continuam iguais.
 - A engrenagem **Ajustes** permite escolher o modelo e indicar seletores personalizados, se necessário.
 - Arraste o cabeçalho para mover o painel. Use minimizar ou `Alt+Shift+G` para mostrar/ocultar. Fechar cancela as solicitações e remove o hub da página.
@@ -37,17 +39,19 @@ Há limites de **20 consultas por IP/minuto** e **60 consultas totais/minuto por
 
 A conta gratuita da Groq pode ser usada com os modelos oferecidos, sujeita às cotas da organização no [Console da Groq](https://console.groq.com/docs/rate-limits). Quando a Groq retorna 429, o servidor preserva o tempo de espera de `Retry-After` e o painel pede para aguardar antes de iniciar novamente. Uma espera indicada acima de oito segundos não dispara uma nova tentativa antecipada.
 
-Somente o texto da questão e das alternativas, além do modelo escolhido, é enviado ao servidor e à Groq. O hub não usa o RA ou a senha do portal, nem envia automaticamente cookies ou o restante da página. Não grava credenciais no navegador.
+Somente o enunciado, as alternativas ou opções das lacunas, os limites do campo de texto e o modelo escolhido são enviados ao servidor e à Groq. O hub não usa o RA ou a senha do portal, nem envia automaticamente cookies ou o restante da página. Não grava credenciais no navegador.
 
 Se `PUBLIC_HUB` não for `true`, o endpoint mantém o modo privado e exige `HUB_ACCESS_TOKEN`. Essa variável não é usada pelo favorito público.
 
 ## Compatibilidade
 
-O leitor atende controles HTML `radio` e `checkbox` e controles acessíveis com `role="radio"` ou `role="checkbox"`. Antes de marcar, verifica se o enunciado, as alternativas e os elementos ainda correspondem à questão consultada. Depois, confere se a seleção realmente ocorreu.
+O leitor atende controles HTML `radio`, `checkbox`, `select` e campos de texto reconhecidos, além dos controles acessíveis correspondentes. Antes de preencher, verifica se o enunciado, os campos e as opções ainda correspondem à questão consultada. Depois, confere se o preenchimento realmente ocorreu.
 
 Os componentes SINGLE e MULTI da Sala do Futuro usam controles MUI com o texto da alternativa em um bloco separado. O leitor reconhece essas linhas e agrupa as caixas de seleção sem depender de um atributo `name`. Esse formato foi reproduzido em testes de navegador a partir dos componentes públicos da plataforma. Quando não reconhece alternativas, o painel informa a falha de leitura.
 
-Layouts próprios, questões discursivas, ordenação, arrastar e soltar, canvas, Shadow DOM de outros componentes e frames de outro domínio podem exigir adaptadores específicos. Não há OCR: imagens, gráficos, áudio e vídeo não são enviados ao modelo.
+Os componentes **FILL_WORDS**, **TEXT** e **TEXT_AI** da Sala também são reconhecidos. Os menus MUI são lidos somente quando abertos e o texto é preenchido com os eventos do campo nativo. Os testes reproduzem o banco de palavras compartilhado, os menus em portal e os limites de caracteres que a Sala mostra abaixo do campo.
+
+Redações em editores próprios, ordenação, arrastar e soltar, canvas, Shadow DOM de outros componentes e frames de outro domínio podem exigir adaptadores específicos. Não há OCR: imagens, gráficos, áudio e vídeo não são enviados ao modelo.
 
 Nos seletores personalizados, indique o bloco de cada questão, o enunciado dentro dele e os controles de alternativas. Exemplo da demonstração:
 

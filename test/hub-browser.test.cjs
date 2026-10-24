@@ -23,6 +23,7 @@ async function setup(options = {}) {
       confidence: 'high', indices: [1], delay: 60, current: true,
       applySelected: true, applyDelay: 20, solveFailures: 0,
       applies: 0, solves: 0, completed: 0, aborted: 0,
+      questionKind: '', response: null, prepareDelay: 0, prepares: 0, prepareAborted: 0, appliedPayloads: [], invalidateOnce: false,
       storageWrites: 0, sharedFingerprint: false, toastEvents: [], confirmedIds: [], scanWarnings: [], ...options,
     };
     const originalSetItem = Storage.prototype.setItem;
@@ -31,23 +32,41 @@ async function setup(options = {}) {
       return originalSetItem.apply(this, args);
     };
     window.createPageAdapter = () => ({
+      prepare: async (_, {signal}) => {
+        window.uiTest.prepares++;
+        await new Promise((resolve,reject) => {
+          const abort = () => {
+            clearTimeout(timer);
+            window.uiTest.prepareAborted++;
+            reject(Object.assign(new Error('Leitura cancelada'), {code:'ABORTED'}));
+          };
+          const timer = setTimeout(() => { signal.removeEventListener('abort',abort); resolve(); }, window.uiTest.prepareDelay);
+          signal.addEventListener('abort',abort,{once:true});
+          if(signal.aborted)abort();
+        });
+      },
       scan: () => ({
         questions: window.uiTest.current ? [...document.querySelectorAll('fieldset[data-id]')].map(element => ({
           id: element.dataset.id,
           fingerprint: window.uiTest.sharedFingerprint ? 'same-question-content' : `${element.dataset.id}-v1`,
           prompt: element.querySelector('legend').textContent,
           multiple: false,
+          ...(window.uiTest.questionKind ? {kind:window.uiTest.questionKind} : {}),
           element,
           options: [...element.querySelectorAll('input')].map((option, index) => ({ index, text: option.value, element: option, type: 'radio' })),
         })) : [],
         warnings: window.uiTest.scanWarnings,
       }),
-      isCurrent: question => window.uiTest.current && question.element.isConnected,
+      isCurrent: question => {
+        if(window.uiTest.invalidateOnce) {window.uiTest.invalidateOnce=false;return false;}
+        return window.uiTest.current && question.element.isConnected;
+      },
       apply: async (question, indices) => {
         window.uiTest.applies++;
+        window.uiTest.appliedPayloads.push(indices);
         if (!window.uiTest.applySelected) return { selected: false, message: 'O site não confirmou a marcação.' };
         const previous = question.options.map(option => option.element.checked);
-        question.options[indices[0]].element.click();
+        if(!question.kind)question.options[indices[0]].element.click();
         await new Promise(resolve => setTimeout(resolve, window.uiTest.applyDelay));
         window.uiTest.confirmedIds.push(question.id);
         return {
@@ -80,7 +99,7 @@ async function setup(options = {}) {
             if (window.uiTest.solveFailures > 0) {
               window.uiTest.solveFailures--;
               reject(Object.assign(new Error('Falha de teste na Groq.'), { code: 'FORMAT' }));
-            } else resolve({ indices: window.uiTest.indices, explanation: '2 + 2 = 4.', confidence: window.uiTest.confidence });
+            } else resolve(window.uiTest.response || { indices: window.uiTest.indices, explanation: '2 + 2 = 4.', confidence: window.uiTest.confidence });
           }, window.uiTest.delay);
           signal.addEventListener('abort', abort, { once: true });
           if (signal.aborted) abort();
@@ -189,13 +208,77 @@ test('automatic mode marks low-confidence answers without an extra manual action
   } finally { await page.close(); }
 });
 
+test('text and blanks route their response payload, count once, and retain undo', async () => {
+  for(const [kind,response,payload] of [
+    ['text',{text:'A distância mede todo o caminho; o deslocamento liga as posições inicial e final.',confidence:'high'},'A distância mede todo o caminho; o deslocamento liga as posições inicial e final.'],
+    ['blanks',{selections:[2,0,1],confidence:'high'},[2,0,1]],
+  ]) {
+    const page=await setup({questionKind:kind,response});
+    try {
+      await start(page);
+      await page.waitForFunction(()=>window.uiTest.confirmedIds.length===1);
+      await page.getByText('Respostas: 1',{exact:true}).first().waitFor();
+      assert.deepEqual(await metric(page,'appliedPayloads'),[payload]);
+      assert.ok((await metric(page,'toastEvents')).some(text=>text.includes('Preenchendo respostas')));
+      await page.evaluate(()=>document.querySelector('main').append(document.createElement('p')));
+      await page.waitForTimeout(400);
+      assert.equal(await metric(page,'solves'),1);
+      await page.getByRole('button',{name:'Desfazer',exact:true}).click();
+      await page.getByText('Respostas: 0',{exact:true}).first().waitFor();
+    } finally {await page.close();}
+  }
+});
+
+test('pausing during lazy-menu preparation cancels reading before any AI query or marking', async () => {
+  const page=await setup({prepareDelay:1000});
+  try {
+    await start(page);
+    await page.waitForFunction(()=>window.uiTest.prepares===1);
+    await page.getByRole('button',{name:'Pausar automático',exact:true}).click();
+    await page.waitForFunction(()=>window.uiTest.prepareAborted===1);
+    assert.equal(await metric(page,'solves'),0);
+    assert.equal(await metric(page,'applies'),0);
+    assert.equal((await metric(page,'toastEvents')).some(text=>text.includes('Leitura cancelada')),false);
+    await page.evaluate(()=>{window.uiTest.prepareDelay=0;});
+    await page.getByRole('button',{name:'Iniciar automático',exact:true}).click();
+    await waitForAnswer(page);
+    assert.equal(await metric(page,'solves'),1);
+  } finally {await page.close();}
+});
+
+test('empty text and blank responses abstain without incrementing the counter',async()=>{
+  for(const [kind,response] of [['text',{text:'',confidence:'low'}],['blanks',{selections:[],confidence:'low'}]]) {
+    const page=await setup({questionKind:kind,response});
+    try {
+      await start(page);
+      await page.getByText('Sem resposta suficiente. Questão ignorada.',{exact:true}).waitFor();
+      assert.equal(await metric(page,'applies'),0);
+      assert.equal(await metric(page,'solves'),1);
+      await page.getByText('Concluído · aguardando próxima questão',{exact:true}).waitFor();
+    } finally {await page.close();}
+  }
+});
+
+test('a pending answer invalidated by a manual field edit is not immediately queried again',async()=>{
+  const page=await setup({questionKind:'text',response:{text:'Resposta gerada.',confidence:'high'},delay:500});
+  try {
+    await start(page);
+    await page.waitForFunction(()=>window.uiTest.solves===1);
+    await page.evaluate(()=>{window.uiTest.invalidateOnce=true;});
+    await page.getByText('A questão mudou. Lendo a página novamente…',{exact:true}).waitFor();
+    await page.getByText('Concluído · aguardando próxima questão',{exact:true}).waitFor();
+    assert.equal(await metric(page,'solves'),1);
+    assert.equal(await metric(page,'applies'),0);
+  } finally {await page.close();}
+});
+
 test('empty scans explain unreadable alternatives once, then distinguish completed questions and scan warnings', async () => {
   const page = await setup({ current: false });
   try {
     await start(page);
-    await page.getByText('Nenhuma alternativa reconhecida', { exact: true }).waitFor();
+    await page.getByText('Nenhuma questão reconhecida', { exact: true }).waitFor();
     assert.equal(await metric(page, 'solves'), 0);
-    const warning = 'Não consegui reconhecer as alternativas desta página.';
+    const warning = 'Não consegui reconhecer os campos de resposta desta página.';
     assert.equal((await metric(page, 'toastEvents')).filter(message => message.includes(warning)).length, 1);
     await page.evaluate(() => document.querySelector('main').append(document.createElement('p')));
     await page.waitForTimeout(350);

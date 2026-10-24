@@ -17,10 +17,65 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
     TIMEOUT: 'A consulta demorou demais. Tente iniciar novamente.',
     ORIGIN: 'Este site não está autorizado a usar o hub hospedado.',
   };
+  function cleanQuestion(question) {
+    if (!question || typeof question !== 'object' || Array.isArray(question)
+        || typeof question.prompt !== 'string' || !question.prompt.trim() || question.prompt.length > 20000) {
+      throw failure('INPUT', messages.INPUT);
+    }
+    const options = (values, minimum = 2) => {
+      if (!Array.isArray(values) || values.length < minimum || values.length > 30
+          || Array.from(values).some(option => typeof option?.text !== 'string' || !option.text.trim() || option.text.length > 4000)) {
+        throw failure('INPUT', messages.INPUT);
+      }
+      return values.map(option => ({ text: option.text }));
+    };
+    const kind = question.kind === undefined ? 'choice' : question.kind;
+    let clean;
+    if (kind === 'choice') clean = { prompt: question.prompt, multiple: question.multiple === true, options: options(question.options) };
+    else if (kind === 'blanks') {
+      if (!Array.isArray(question.fields) || question.fields.length < 1 || question.fields.length > 20) throw failure('INPUT', messages.INPUT);
+      clean = { prompt: question.prompt, kind, fields: Array.from(question.fields, field => {
+        if (!field || typeof field.label !== 'string' || field.label.length > 1000) throw failure('INPUT', messages.INPUT);
+        return { label: field.label, options: options(field.options, 1) };
+      }) };
+    } else if (kind === 'text') {
+      const maxLength = question.maxLength === undefined ? 3000 : question.maxLength;
+      const minLength = question.minLength === undefined ? 0 : question.minLength;
+      if (!Number.isInteger(maxLength) || maxLength < 1 || maxLength > 8000
+          || !Number.isInteger(minLength) || minLength < 0 || minLength > maxLength) throw failure('INPUT', messages.INPUT);
+      clean = { prompt: question.prompt, kind, maxLength, minLength };
+    } else throw failure('INPUT', messages.INPUT);
+    if (JSON.stringify(clean).length > 32000) throw failure('INPUT', messages.INPUT);
+    return clean;
+  }
+  function cleanAnswer(answer, question) {
+    if (!answer || typeof answer !== 'object' || Array.isArray(answer)
+        || typeof answer.explanation !== 'string' || !answer.explanation.trim() || answer.explanation.length > 3000
+        || !['high', 'medium', 'low'].includes(answer.confidence)) throw failure('FORMAT', messages.FORMAT);
+    const details = { explanation: answer.explanation.trim(), confidence: answer.confidence };
+    if (question.kind === 'blanks') {
+      if (!Array.isArray(answer.selections) || ('indices' in answer) || ('text' in answer)
+          || (answer.selections.length !== 0 && answer.selections.length !== question.fields.length)
+          || answer.selections.some((index, field) => !Number.isInteger(index) || index < 0 || index >= question.fields[field]?.options.length)) {
+        throw failure('FORMAT', messages.FORMAT);
+      }
+      return { selections: [...answer.selections], ...details };
+    }
+    if (question.kind === 'text') {
+      if (typeof answer.text !== 'string' || ('indices' in answer) || ('selections' in answer)) throw failure('FORMAT', messages.FORMAT);
+      const text = answer.text.trim();
+      if (text.length > question.maxLength || (text.length > 0 && text.length < question.minLength)) throw failure('FORMAT', messages.FORMAT);
+      return { text, ...details };
+    }
+    if (!Array.isArray(answer.indices) || new Set(answer.indices).size !== answer.indices.length
+        || answer.indices.some(index => !Number.isInteger(index) || index < 0 || index >= question.options.length)
+        || (!question.multiple && answer.indices.length > 1)) throw failure('FORMAT', messages.FORMAT);
+    return { indices: [...answer.indices], ...details };
+  }
   async function solve({ question, model = 'openai/gpt-oss-120b', signal } = {}) {
     if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
-    if ((!publicAccess && !token) || !question || typeof question.prompt !== 'string' || !Array.isArray(question.options)) throw failure('INPUT', messages.INPUT);
-    const data = { question: { prompt: question.prompt, multiple: question.multiple === true, options: question.options.map(option => ({ text: option.text })) }, model };
+    if (!publicAccess && !token) throw failure('INPUT', messages.INPUT);
+    const data = { question: cleanQuestion(question), model };
     const controller = new AbortController();
     let timedOut = false;
     const abort = () => controller.abort();
@@ -50,13 +105,7 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
         const knownCode = Object.hasOwn(messages, code);
         throw failure(knownCode ? code : 'API', knownCode ? messages[code] : 'O servidor não conseguiu responder. Tente novamente.');
       }
-      if (!Array.isArray(answer?.indices) || new Set(answer.indices).size !== answer.indices.length ||
-          answer.indices.some(index => !Number.isInteger(index) || index < 0 || index >= data.question.options.length) ||
-          (!data.question.multiple && answer.indices.length > 1) || typeof answer.explanation !== 'string' ||
-          !answer.explanation.trim() || answer.explanation.length > 3000 || !['high', 'medium', 'low'].includes(answer.confidence)) {
-        throw failure('FORMAT', messages.FORMAT);
-      }
-      return { indices: answer.indices, explanation: answer.explanation.trim(), confidence: answer.confidence };
+      return cleanAnswer(answer, data.question);
     } catch (error) {
       if (controller.signal.aborted) throw failure(timedOut ? 'TIMEOUT' : 'ABORTED', timedOut ? messages.TIMEOUT : 'Consulta cancelada.');
       if (error?.code && ['AUTH', 'UNAUTHORIZED', 'CONFIG', 'RATE_LIMIT', 'MODEL', 'INPUT', 'FORMAT', 'TIMEOUT', 'ORIGIN', 'API'].includes(error.code)) throw error;

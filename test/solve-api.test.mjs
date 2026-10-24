@@ -159,6 +159,122 @@ test('only POST JSON is accepted and question/model payloads are validated',asyn
   assert.equal(model,'openai/gpt-oss-20b');
 });
 
+test('blank questions forward only their labeled options and return only selections for that kind',async()=>{
+  let received;
+  const clean={kind:'blanks',prompt:'Complete a velocidade e a aceleração.',fields:[
+    {label:'Variação da velocidade',options:[{text:'4'},{text:'8'}]},
+    {label:'Aceleração',options:[{text:'2'},{text:'6'}]},
+  ]};
+  const dirty={...clean,element:{private:'page data'},options:[{text:'not applicable'}],fields:clean.fields.map(field=>({
+    ...field,value:'private DOM value',element:{private:'element'},options:field.options.map(option=>({...option,value:'private option value',element:{private:'option element'}})),
+  }))};
+  const handler=createSolveHandler({env,client:{solve:async input=>{
+    received=input;
+    return {selections:[1,0],explanation:'Valores calculados.',confidence:'high',indices:[0],text:'not applicable',providerPrivate:env.GROQ_API_KEY};
+  }}});
+  const {res}=await invoke({handler,body:{question:dirty,apiKey:'must-not-be-used'}});
+  assert.equal(res.statusCode,200);
+  assert.deepEqual(received.question,clean);
+  assert.equal(received.apiKey,env.GROQ_API_KEY);
+  assert.deepEqual(res.body,{selections:[1,0],explanation:'Valores calculados.',confidence:'high'});
+  assert.ok(!res.text.includes(env.GROQ_API_KEY));
+});
+
+test('a remaining blank may have one option while choice questions still require two',async()=>{
+  const remaining={kind:'blanks',prompt:'Complete o campo restante.',fields:[{label:'Variação da velocidade',options:[{text:'8'}]}]};
+  let received;
+  const handler=createSolveHandler({env,client:{solve:async input=>{
+    received=input.question;
+    return {selections:[0],explanation:'É a opção restante.',confidence:'high'};
+  }}});
+  const {res}=await invoke({handler,body:{question:remaining}});
+  assert.equal(res.statusCode,200);
+  assert.deepEqual(received,remaining);
+  assert.deepEqual(res.body.selections,[0]);
+  const empty=await invoke({handler,body:{question:{...remaining,fields:[{...remaining.fields[0],options:[]}]}}});
+  assert.equal(empty.res.statusCode,400);
+  const choice=await invoke({handler,body:{question:{...question,options:[{text:'8'}]}}});
+  assert.equal(choice.res.statusCode,400);
+});
+
+test('text questions support defaults and explicit character limits without forwarding DOM content',async()=>{
+  for(const [input,expected] of [
+    [{kind:'text',prompt:'Explique distância e deslocamento.',element:{private:'DOM'},options:[{text:'ignored'}]}, {kind:'text',prompt:'Explique distância e deslocamento.',maxLength:3000,minLength:0}],
+    [{kind:'text',prompt:'Explique o movimento.',maxLength:80,minLength:8,currentValue:'private answer'}, {kind:'text',prompt:'Explique o movimento.',maxLength:80,minLength:8}],
+  ]) {
+    let received;
+    const handler=createSolveHandler({env,client:{solve:async value=>{received=value;return {text:'A distância mede o caminho percorrido.',explanation:'Definição de distância.',confidence:'high',indices:[0],selections:[1],private:'not forwarded'};}}});
+    const {res}=await invoke({handler,body:{question:input}});
+    assert.equal(res.statusCode,200);
+    assert.deepEqual(received.question,expected);
+    assert.deepEqual(res.body,{text:'A distância mede o caminho percorrido.',explanation:'Definição de distância.',confidence:'high'});
+  }
+});
+
+test('explicit choice kind is normalized to the existing choice contract',async()=>{
+  let received;
+  const handler=createSolveHandler({env,client:{solve:async input=>{received=input.question;return answer;}}});
+  const {res}=await invoke({handler,body:{question:{...question,kind:'choice'}}});
+  assert.equal(res.statusCode,200);
+  assert.deepEqual(received,question);
+  assert.deepEqual(res.body,answer);
+});
+
+test('unsupported kinds and invalid blank or text limits fail before provider usage',async()=>{
+  const validField={label:'Campo',options:[{text:'A'},{text:'B'}]};
+  const blanks={kind:'blanks',prompt:'Preencha as lacunas.',fields:[validField]};
+  const text={kind:'text',prompt:'Explique o resultado.'};
+  const invalid=[
+    {...text,kind:'essay'}, {...text,kind:null},
+    {...blanks,fields:[]}, {...blanks,fields:Array(21).fill(validField)}, {...blanks,fields:[null]},
+    {...blanks,fields:[{...validField,label:5}]}, {...blanks,fields:[{...validField,label:'x'.repeat(1001)}]},
+    {...blanks,fields:[{...validField,options:[]}]},
+    {...blanks,fields:[{...validField,options:Array(31).fill({text:'A'})}]},
+    {...blanks,fields:[{...validField,options:[{text:'A'},{text:''}]}]},
+    {...blanks,fields:[{...validField,options:[{text:'A'},{text:'x'.repeat(4001)}]}]},
+    {...text,maxLength:0}, {...text,maxLength:8001}, {...text,maxLength:1.5}, {...text,maxLength:'100'},
+    {...text,minLength:-1}, {...text,minLength:3001}, {...text,maxLength:10,minLength:11}, {...text,minLength:'1'},
+    {...blanks,fields:Array(5).fill({label:'Campo',options:[{text:'a'.repeat(3500)},{text:'b'.repeat(3500)}]})},
+  ];
+  let calls=0;
+  const handler=createSolveHandler({env,client:{solve:async()=>{calls++;return {selections:[0],explanation:'A opção foi escolhida.',confidence:'high'};}}});
+  for(const candidate of invalid) {
+    // Separate budgets keep the validation cases independent of the 20/min limiter.
+    const fresh=createSolveHandler({env,client:{solve:async()=>{calls++;return answer;}}});
+    const {res}=await invoke({handler:fresh,body:{question:candidate}});
+    assert.equal(res.statusCode,400);
+    assert.equal(res.body.error.code,'INPUT');
+  }
+  assert.equal(calls,0);
+  const emptyLabel=await invoke({handler,body:{question:{...blanks,fields:[{...validField,label:''}]}}});
+  assert.equal(emptyLabel.res.statusCode,200,'A blank label may be empty when its context is included in the prompt');
+  assert.equal(calls,1);
+});
+
+test('answers are validated and projected by question kind, including abstention',async()=>{
+  const blanks={kind:'blanks',prompt:'Complete dois campos.',fields:[{label:'Um',options:[{text:'A'},{text:'B'}]},{label:'Dois',options:[{text:'C'},{text:'D'}]}]};
+  const text={kind:'text',prompt:'Explique em poucas palavras.',minLength:5,maxLength:30};
+  const common={explanation:'Justificativa pública.',confidence:'high'};
+  const cases=[
+    [blanks,{selections:[],...common},200], [blanks,{selections:[1,0],...common},200],
+    [blanks,{selections:[1],...common},502], [blanks,{selections:[1,2],...common},502],
+    [blanks,{selections:[1,'0'],...common},502], [blanks,{indices:[1,0],...common},502],
+    [text,{text:'',...common},200], [text,{text:'Uma explicação válida.',...common},200],
+    [text,{text:'a',...common},502], [text,{text:'   ',...common},200],
+    [text,{text:'       Uma explicação válida.       ',...common},200],
+    [text,{text:'x'.repeat(31),...common},502], [text,{text:12,...common},502],
+    [text,{indices:[0],...common},502], [question,{indices:[3],...common},502],
+  ];
+  for(const [candidate,output,status] of cases) {
+    const handler=createSolveHandler({env,client:{solve:async()=>({...output,private:'provider private'})}});
+    const {res}=await invoke({handler,body:{question:candidate}});
+    assert.equal(res.statusCode,status);
+    assert.ok(!res.text.includes('provider private'));
+    if(status===200)assert.deepEqual(res.body,typeof output.text==='string'?{...output,text:output.text.trim()}:output);
+    else assert.equal(res.body.error.code,'FORMAT');
+  }
+});
+
 test('raw request body is byte-limited even when chunked or using multibyte text',async()=>{
   const valid=await invoke({stream:[Buffer.from(JSON.stringify({question}))]});
   assert.equal(valid.res.statusCode,200);

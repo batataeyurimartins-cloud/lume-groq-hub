@@ -153,27 +153,81 @@ async function readBody(req) {
 function validateBody(body, env) {
   if (!body || typeof body !== 'object' || Array.isArray(body)
       || !body.question || typeof body.question !== 'object' || Array.isArray(body.question)) {
-    throw apiError('INPUT', 'Envie uma questão com enunciado e alternativas.');
+    throw apiError('INPUT', 'Envie uma questão com enunciado e campos de resposta.');
   }
   const question = body.question;
-  if (typeof question.prompt !== 'string' || !question.prompt.trim() || question.prompt.length > 20000
-      || typeof question.multiple !== 'boolean' || !Array.isArray(question.options)
-      || question.options.length < 2 || question.options.length > 30) {
-    throw apiError('INPUT', 'A questão precisa ter um enunciado válido, multiple booleano e de 2 a 30 alternativas.');
+  if (typeof question.prompt !== 'string' || !question.prompt.trim() || question.prompt.length > 20000) {
+    throw apiError('INPUT', 'A questão precisa ter um enunciado legível de até 20000 caracteres.');
   }
-  const options = question.options.map(option => {
-    if (!option || typeof option.text !== 'string' || !option.text.trim() || option.text.length > 4000) {
-      throw apiError('INPUT', 'Cada alternativa precisa ter texto legível de até 4000 caracteres.');
+  const cleanOptions = (options, minimum = 2) => {
+    if (!Array.isArray(options) || options.length < minimum || options.length > 30) {
+      throw apiError('INPUT', `Cada grupo precisa ter de ${minimum} a 30 alternativas.`);
     }
-    return { text: option.text };
-  });
-  const cleanQuestion = { prompt: question.prompt, multiple: question.multiple, options };
+    return options.map(option => {
+      if (!option || typeof option !== 'object' || Array.isArray(option)
+          || typeof option.text !== 'string' || !option.text.trim() || option.text.length > 4000) {
+        throw apiError('INPUT', 'Cada alternativa precisa ter texto legível de até 4000 caracteres.');
+      }
+      return { text: option.text };
+    });
+  };
+  let cleanQuestion;
+  const kind = question.kind === undefined ? 'choice' : question.kind;
+  if (kind === 'choice') {
+    if (typeof question.multiple !== 'boolean') throw apiError('INPUT', 'A questão de alternativas precisa indicar multiple booleano.');
+    // Preserve the existing wire shape for old and explicit choice requests.
+    cleanQuestion = { prompt: question.prompt, multiple: question.multiple, options: cleanOptions(question.options) };
+  } else if (kind === 'blanks') {
+    if (!Array.isArray(question.fields) || question.fields.length < 1 || question.fields.length > 20) {
+      throw apiError('INPUT', 'Uma questão de lacunas precisa ter de 1 a 20 campos.');
+    }
+    const fields = question.fields.map(field => {
+      if (!field || typeof field !== 'object' || Array.isArray(field)
+          || typeof field.label !== 'string' || field.label.length > 1000) {
+        throw apiError('INPUT', 'Cada lacuna precisa ter um rótulo de até 1000 caracteres.');
+      }
+      return { label: field.label, options: cleanOptions(field.options, 1) };
+    });
+    cleanQuestion = { kind, prompt: question.prompt, fields };
+  } else if (kind === 'text') {
+    const maxLength = question.maxLength === undefined ? 3000 : question.maxLength;
+    const minLength = question.minLength === undefined ? 0 : question.minLength;
+    if (!Number.isInteger(maxLength) || maxLength < 1 || maxLength > 8000
+        || !Number.isInteger(minLength) || minLength < 0 || minLength > maxLength) {
+      throw apiError('INPUT', 'Os limites da resposta de texto precisam ser inteiros entre 0 e 8000, com máximo maior que zero.');
+    }
+    cleanQuestion = { kind, prompt: question.prompt, maxLength, minLength };
+  } else throw apiError('INPUT', 'Este tipo de questão não é suportado.');
   if (JSON.stringify(cleanQuestion).length > 32000) throw apiError('INPUT', 'A questão é longa demais. Reduza o texto capturado.');
   const configuredModel = env.GROQ_MODEL || 'openai/gpt-oss-120b';
   if (!MODELS.has(configuredModel)) throw apiError('CONFIG', 'O serviço está com um modelo indisponível na configuração.', 503);
   const model = body.model === undefined ? configuredModel : body.model;
   if (typeof model !== 'string' || !MODELS.has(model)) throw apiError('MODEL', 'Escolha um dos modelos permitidos: openai/gpt-oss-120b ou openai/gpt-oss-20b.');
   return { question: cleanQuestion, model };
+}
+
+function projectAnswer(answer, question) {
+  const invalid = () => apiError('FORMAT', 'O serviço retornou uma resposta inválida. Nenhum campo foi preenchido.', 502);
+  if (!answer || typeof answer !== 'object' || Array.isArray(answer)
+      || typeof answer.explanation !== 'string' || !answer.explanation.trim() || answer.explanation.length > 3000
+      || !['high', 'medium', 'low'].includes(answer.confidence)) throw invalid();
+  const common = { explanation: answer.explanation.trim(), confidence: answer.confidence };
+  if (question.kind === 'text') {
+    if (typeof answer.text !== 'string') throw invalid();
+    const text = answer.text.trim();
+    if (text.length > question.maxLength || (text.length > 0 && text.length < question.minLength)) throw invalid();
+    return { text, ...common };
+  }
+  if (question.kind === 'blanks') {
+    if (!Array.isArray(answer.selections)
+        || (answer.selections.length !== 0 && answer.selections.length !== question.fields.length)
+        || answer.selections.some((index, field) => !Number.isInteger(index) || index < 0 || index >= question.fields[field].options.length)) throw invalid();
+    return { selections: [...answer.selections], ...common };
+  }
+  if (!Array.isArray(answer.indices) || new Set(answer.indices).size !== answer.indices.length
+      || answer.indices.some(index => !Number.isInteger(index) || index < 0 || index >= question.options.length)
+      || (!question.multiple && answer.indices.length > 1)) throw invalid();
+  return { indices: [...answer.indices], ...common };
 }
 
 function publicFailure(error) {
@@ -261,7 +315,7 @@ export function createSolveHandler({ env = process.env, client = createGroqClien
     try {
       const { question, model } = validateBody(await readBody(req), env);
       const answer = await client.solve({ apiKey: env.GROQ_API_KEY, question, model, signal: controller.signal });
-      return send(200, { indices: answer.indices, explanation: answer.explanation, confidence: answer.confidence });
+      return send(200, projectAnswer(answer, question));
     } catch (error) {
       const safe = publicFailure(error);
       if (safe.retryAfter) res.setHeader('Retry-After', String(safe.retryAfter));

@@ -1,6 +1,6 @@
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.1.2';
+  const version = '3.2.0';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
@@ -151,6 +151,12 @@ function mountLumeHub() {
     updateControls();
     try {
       while (state.active && !state.closed && run === state.run) {
+        const controller = new AbortController();
+        state.controller = controller;
+        const readingUrl = location.href;
+        if (typeof adapter.prepare === 'function') await adapter.prepare(state.selectors, { signal: controller.signal });
+        if (state.closed || !state.active || run !== state.run || controller.signal.aborted) break;
+        if (location.href !== readingUrl) { state.dirty = true; continue; }
         const result = adapter.scan(state.selectors);
         for (const warning of result.warnings || []) if (!state.warnings.has(warning)) {
           state.warnings.add(warning);
@@ -159,8 +165,8 @@ function mountLumeHub() {
         const question = result.questions.find(item => !state.handled.has(keyFor(item)));
         if (!question) {
           if (result.questions.length === 0) {
-            status(result.warnings?.length ? 'Leitura precisa de ajuste' : 'Nenhuma alternativa reconhecida');
-            const warning = 'Não consegui reconhecer as alternativas desta página.';
+            status(result.warnings?.length ? 'Leitura precisa de ajuste' : 'Nenhuma questão reconhecida');
+            const warning = 'Não consegui reconhecer os campos de resposta desta página.';
             if (!state.warnings.has(warning)) {
               state.warnings.add(warning);
               notify(warning);
@@ -171,9 +177,8 @@ function mountLumeHub() {
         const key = keyFor(question);
         const pageUrl = location.href;
         if (!adapter.isCurrent(question)) { state.dirty = true; break; }
-        const controller = new AbortController();
-        state.controller = controller;
-        notify('Questão detectada');
+        const kind = question.kind || 'choice';
+        notify(kind === 'text' ? 'Questão de texto detectada' : kind === 'blanks' ? 'Lacunas detectadas' : 'Questão detectada');
         status('Buscando resposta…');
         notify('Buscando resposta…');
         let querying = true;
@@ -182,19 +187,24 @@ function mountLumeHub() {
           querying = false;
           if (state.closed || !state.active || run !== state.run || controller.signal.aborted) break;
           if (location.href !== pageUrl || !adapter.isCurrent(question)) {
+            // A manual edit can invalidate a pending field answer without
+            // changing its prompt. Do not immediately query and overwrite it.
+            state.handled.set(key, { status: 'skipped' });
             notify('A questão mudou. Lendo a página novamente…');
             state.dirty = true;
             break;
           }
-          if (!answer.indices.length) {
+          const payload = kind === 'text' ? answer.text : kind === 'blanks' ? answer.selections : answer.indices;
+          if (kind === 'text' ? typeof payload !== 'string' || !payload.trim() : !Array.isArray(payload) || !payload.length) {
             state.handled.set(key, { status: 'skipped' });
             notify('Sem resposta suficiente. Questão ignorada.');
             continue;
           }
           notify(answer.confidence === 'low' ? 'Resposta detectada · confiança baixa' : 'Resposta detectada');
-          status('Marcando respostas…');
-          notify('Marcando respostas…');
-          const outcome = await adapter.apply(question, answer.indices, { signal: controller.signal });
+          const filling = kind === 'text' || kind === 'blanks' ? 'Preenchendo respostas…' : 'Marcando respostas…';
+          status(filling);
+          notify(filling);
+          const outcome = await adapter.apply(question, payload, { signal: controller.signal });
           if (state.closed) break;
           const entry = { status: outcome.selected ? 'done' : 'error', counted: Boolean(outcome.selected), key };
           if (typeof outcome.undo === 'function') { state.undo = outcome.undo; state.undoEntry = entry; }
@@ -221,12 +231,13 @@ function mountLumeHub() {
         }
       }
     } catch (error) {
-      if (!state.closed) {
+      if (!state.closed && state.active && error.code !== 'ABORTED') {
         pause(false);
         notify(error.message || 'Não foi possível ler a atividade. Confira os ajustes.', 'error');
       }
     } finally {
       state.processing = false;
+      state.controller = null;
       updateControls();
       if (state.active && state.dirty && !state.closed) schedule();
     }
@@ -269,7 +280,7 @@ function mountLumeHub() {
   });
   observer.observe(document.documentElement, {
     childList: true, subtree: true, characterData: true, attributes: true,
-    attributeFilter: ['aria-checked', 'aria-label', 'aria-labelledby', 'aria-hidden', 'aria-disabled', 'hidden', 'style', 'class', 'disabled', 'name', 'type', 'for', 'id'],
+    attributeFilter: ['aria-checked', 'aria-label', 'aria-labelledby', 'aria-hidden', 'aria-disabled', 'aria-expanded', 'aria-controls', 'role', 'hidden', 'style', 'class', 'disabled', 'name', 'type', 'for', 'id', 'placeholder', 'contenteditable', 'maxlength', 'minlength'],
   });
   function close() {
     if (state.closed) return;

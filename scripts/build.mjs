@@ -5,7 +5,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const modules = ['page-adapter.js', 'groq-client.js', 'hosted-client.js', 'hub.js'];
 const sources = await Promise.all(modules.map(name => readFile(path.join(root, 'src', name), 'utf8')));
 const body = sources.map((source, index) => `\n// ${modules[index]}\n${source.replace(/\bexport\s+(?=(?:async\s+)?(?:function|const|class)\b)/g, '')}`).join('\n');
-const bundle = `/* Lume · Hub Groq v3.1.2 | Hub compacto com respostas e marcação automática. */\n(() => {\n'use strict';\n${body}\n})();\n`;
+const bundle = `/* Lume · Hub Groq v3.2.0 | Hub compacto com respostas e preenchimento automático. */\n(() => {\n'use strict';\n${body}\n})();\n`;
 await mkdir(path.join(root, 'dist'), {recursive:true});
 await writeFile(path.join(root, 'dist/hub-groq.js'), bundle);
 const bookmarklet = `/* Lume · Favorito público. A chave da Groq permanece no servidor. */\n(() => {\n'use strict';\nconst source = document.currentScript?.src;\nif (!source) throw new Error('Abra o Lume pelo favorito instalado no site.');\nwindow.__LUME_HOSTED_CONFIG__ = { endpoint: new URL('/api/solve', source).href, public: true };\n${bundle}\n})();\n`;

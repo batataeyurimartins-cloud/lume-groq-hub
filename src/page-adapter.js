@@ -145,7 +145,7 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
     }
     return normalize(pieces.join(' '));
   }
-  function scan(config = {}) {
+  function scanChoices(config = {}) {
     const settings = {
       containerSelector: normalize(config.containerSelector),
       promptSelector: normalize(config.promptSelector),
@@ -227,10 +227,10 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
     }
     return { questions, warnings: [...new Set(warnings)] };
   }
-  function isCurrent(question) {
+  function isChoiceCurrent(question) {
     const previous = metadata.get(question);
     if (!previous || !previous.root.isConnected || previous.members.some(element => !element.isConnected)) return false;
-    const current = scan(previous.settings).questions.find(candidate => candidate.id === `q-${previous.key}`);
+    const current = scanChoices(previous.settings).questions.find(candidate => candidate.id === `q-${previous.key}`);
     return Boolean(current && current.element === previous.root && current.fingerprint === previous.fingerprint &&
       current.options.length === previous.members.length && current.options.every((option, index) => option.element === previous.members[index]));
   }
@@ -243,7 +243,7 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   const states = members => members.map(selected);
   const equal = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
   const settle = () => new Promise(resolve => setTimeout(resolve, 35));
-  async function apply(question, indices, { signal } = {}) {
+  async function applyChoice(question, indices, { signal } = {}) {
     const previous = metadata.get(question);
     if (!previous || !isCurrent(question)) return { selected: false, message: 'A questão mudou. Leia a página novamente.' };
     if (!Array.isArray(indices) || !indices.length || new Set(indices).size !== indices.length ||
@@ -302,5 +302,376 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
       return { selected: false, message: 'O site impediu a marcação. Revise a página.', ...(touched ? { undo } : {}) };
     }
   }
-  return { scan, isCurrent, apply };
+  // Form answers keep the provider payload independent of the page's DOM.
+  const SELECTOR = 'select:not([multiple]),.MuiSelect-select[role="combobox"][aria-haspopup="listbox"]';
+  const TEXT_SELECTOR = 'textarea,input[type="text"],input:not([type])';
+  const FIELD_ROOT = '.que,.question,.question-container,.question-item,.quiz-question,[data-question],[data-question-id],fieldset,.MuiPaper-elevation3';
+  const menuCache = new WeakMap();
+  let preparationWarnings = [];
+  let preparing = false;
+  let menuSession = null;
+  const clean = value => normalize(String(value || '').replace(/[\u200b\ufeff]/g, ''));
+  const aborted = signal => {
+    if (signal?.aborted) {
+      const error = new Error('Operação cancelada.');
+      error.code = 'ABORTED';
+      throw error;
+    }
+  };
+  function formVisible(element, root) {
+    if (!element?.isConnected || isExcluded(element)) return false;
+    for (let item = element; item && item !== root?.parentElement; item = item.parentElement) {
+      const hiddenByOwnMenu = menuSession && item.contains(menuSession.field.element) &&
+        !menuSession.hiddenBefore.has(item);
+      if (item.hidden || (item.getAttribute('aria-hidden') === 'true' && !hiddenByOwnMenu)) return false;
+      const style = view.getComputedStyle(item);
+      if (style.display === 'none' || /^(hidden|collapse)$/.test(style.visibility)) return false;
+    }
+    return true;
+  }
+  function selectDescriptor(element) {
+    return { element, type: element.tagName === 'SELECT' ? 'native' : 'mui' };
+  }
+  function fieldValue(field) {
+    if (field.type !== 'mui') return String(field.element.value || '');
+    const input = field.element.closest('.MuiInputBase-root')?.querySelector('input.MuiSelect-nativeInput');
+    return input ? String(input.value || '') : clean(field.element.textContent);
+  }
+  function textCandidate(element, root) {
+    if (element.tagName === 'INPUT' && !element.closest('.que,.question,.question-container,.question-item,.quiz-question,[data-question],[data-question-id],fieldset') &&
+        !/^(?:responder|resposta)\b/i.test(element.getAttribute('placeholder') || element.getAttribute('aria-label') || '')) return false;
+    return !element.matches('.MuiSelect-nativeInput,[aria-hidden="true"],[type="hidden"]') &&
+      !element.readOnly && !element.closest('.MuiSelect-root,[role="listbox"]') && formVisible(element, root);
+  }
+  function fieldRoot(element, settings) {
+    if (settings.containerSelector) return element.closest(settings.containerSelector);
+    const explicit = element.closest(FIELD_ROOT);
+    if (explicit) return explicit;
+    return element.closest('article,section,.MuiPaper-root');
+  }
+  function formSettings(config = {}) {
+    return {
+      containerSelector: normalize(config.containerSelector),
+      promptSelector: normalize(config.promptSelector),
+      optionSelector: normalize(config.optionSelector)
+    };
+  }
+  function collectFieldGroups(config = {}) {
+    const settings = formSettings(config);
+    for (const selector of Object.values(settings)) if (selector) doc.querySelector(selector);
+    const groups = new Map();
+    const add = (element, kind) => {
+      if (!visible(element) || isExcluded(element)) return;
+      const root = fieldRoot(element, settings);
+      if (!root || !visible(root) || root.matches('body,html')) return;
+      if (kind === 'text' && !textCandidate(element, root)) return;
+      const key = `${kind}:${uid(root)}`;
+      if (!groups.has(key)) groups.set(key, { kind, root, settings, fields: [] });
+      groups.get(key).fields.push(kind === 'blanks' ? selectDescriptor(element) : { element, type: 'text' });
+    };
+    for (const element of doc.querySelectorAll(SELECTOR)) add(element, 'blanks');
+    for (const element of doc.querySelectorAll(TEXT_SELECTOR)) add(element, 'text');
+    return [...groups.values()];
+  }
+  function fieldPrompt(root, fields, kind, settings) {
+    const placeholders = new Map(fields.map((field, index) => [field.element, kind === 'blanks' ? `[Lacuna ${index + 1}]` : '']));
+    let scope = root;
+    if (settings.promptSelector) {
+      const custom = root.matches(settings.promptSelector) ? root : root.querySelector(settings.promptSelector);
+      // A custom enunciado selector must include the phrase's slots for blanks.
+      if (custom && (kind !== 'blanks' || fields.every(field => custom.contains(field.element)))) scope = custom;
+    }
+    const visit = node => {
+      if (node.nodeType === 3) return node.textContent;
+      if (node.nodeType !== 1 || isExcluded(node)) return '';
+      if (placeholders.has(node)) return ` ${placeholders.get(node)} `;
+      if (!formVisible(node, root) || node.matches('script,style,button,svg,textarea,input,select,[role="listbox"]')) return '';
+      if (kind === 'text' && fields.some(field => node.matches('.MuiInputBase-root') && node.contains(field.element))) return '';
+      const ownText = clean(node.textContent);
+      if (node.matches('p,span,label,.MuiTypography-root,.MuiFormHelperText-root') &&
+          (/^N[°ºo.]?\s*(?:mínimo|máximo|minimo|maximo)\s+de\s+caracteres\s*:/i.test(ownText) ||
+           /^\d+\s*(?:\/\s*\d+|caracteres?|palavras?)$/i.test(ownText) ||
+           /^(?:caracteres?|palavras?)\s*:\s*\d+(?:\s*\/\s*\d+)?$/i.test(ownText))) return '';
+      return Array.from(node.childNodes).map(visit).join(' ');
+    };
+    let prompt = clean(visit(scope));
+    if (kind === 'blanks') for (let index = 0; index < fields.length; index++) {
+      if (!prompt.includes(`[Lacuna ${index + 1}]`)) prompt += ` [Lacuna ${index + 1}]`;
+    }
+    if (kind === 'blanks' && fields.every(field => field.type === 'mui' && /^\d+-/.test(field.element.id))) {
+      prompt += ' As opções pertencem a um banco compartilhado; uma opção usada sai dos outros menus.';
+    }
+    return prompt;
+  }
+  function limitsFor(element, root) {
+    // Typography siblings have no separating text node: textContent would turn
+    // a maximum of 160 followed by "0 caractere" into the number 1600.
+    const walker = doc.createTreeWalker(root, view.NodeFilter.SHOW_TEXT);
+    const pieces = [];
+    let node;
+    while ((node = walker.nextNode())) pieces.push(node.textContent);
+    const content = clean(pieces.join(' '));
+    const minMatch = content.match(/N[°ºo.]?\s*(?:mínimo|minimo)\s+de\s+caracteres\s*:\s*(\d+)/i);
+    const maxMatch = content.match(/N[°ºo.]?\s*(?:máximo|maximo)\s+de\s+caracteres\s*:\s*(\d+)/i);
+    const attrMax = Number(element.getAttribute('maxlength'));
+    const attrMin = Number(element.getAttribute('minlength'));
+    const minimum = minMatch ? Number(minMatch[1]) : element.hasAttribute('minlength') && attrMin >= 0 ? attrMin : 0;
+    const explicitMax = maxMatch ? Number(maxMatch[1]) : element.hasAttribute('maxlength') && attrMax > 0 ? attrMax : null;
+    const maximum = explicitMax ?? Math.max(3000, minimum);
+    const maxLength = Math.max(1, Math.min(8000, maximum));
+    if (minimum > 8000 || minimum > maxLength) return { minLength: minimum, maxLength, invalid: true };
+    return { minLength: Math.max(0, minimum || 0), maxLength };
+  }
+  function nativeOptions(element) {
+    return Array.from(element.options).filter(option => !option.disabled && !option.hidden &&
+      !(option.value === '' && /^(?:selecione|escolha|select|choose|[-–—\s]*$)/i.test(clean(option.textContent))))
+      .map(option => ({ text: clean(option.textContent), value: String(option.value), element: option }));
+  }
+  function descriptorOptions(field, context) {
+    if (field.type === 'native') return nativeOptions(field.element);
+    const cached = menuCache.get(field.element);
+    return cached?.context === context ? cached.options : null;
+  }
+  function fieldContext(group, prompt) {
+    return JSON.stringify([view.location?.href || '', uid(group.root), group.root.getAttribute('data-question-id'), prompt, group.fields.map(field => uid(field.element))]);
+  }
+  function listboxFor(trigger) {
+    const id = trigger.getAttribute('aria-controls');
+    const linked = id && doc.getElementById(id);
+    if (linked?.getAttribute('role') === 'listbox' && fieldMenuVisible(linked, trigger)) return linked;
+    if (trigger.getAttribute('aria-expanded') !== 'true') return null;
+    const menus = Array.from(doc.querySelectorAll('.MuiMenu-root [role="listbox"]')).filter(visible);
+    return menus.length === 1 ? menus[0] : null;
+  }
+  function fieldMenuVisible(menu, trigger) {
+    return trigger.getAttribute('aria-expanded') === 'true' && visible(menu);
+  }
+  async function waitUntil(check, signal, milliseconds = 1000) {
+    const until = Date.now() + milliseconds;
+    while (Date.now() < until) {
+      aborted(signal);
+      const result = check();
+      if (result) return result;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    return null;
+  }
+  async function openSelect(field, signal) {
+    aborted(signal);
+    if (!field.element.isConnected || disabled(field.element)) throw new Error('A lacuna está desabilitada ou mudou.');
+    const existing = listboxFor(field.element);
+    if (existing) return existing;
+    if (Array.from(doc.querySelectorAll('.MuiMenu-root [role="listbox"]')).some(visible)) throw new Error('Feche o menu aberto na página para continuar.');
+    const hiddenBefore = new Set();
+    for (let item = field.element; item; item = item.parentElement) if (item.getAttribute('aria-hidden') === 'true') hiddenBefore.add(item);
+    menuSession = { field, hiddenBefore };
+    field.element.focus();
+    field.element.dispatchEvent(new view.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+    const menu = await waitUntil(() => listboxFor(field.element), signal);
+    if (!menu) throw new Error('Não foi possível abrir as opções desta lacuna.');
+    return menu;
+  }
+  async function closeSelect(field, menu) {
+    try {
+      if (!menu?.isConnected) return;
+      if (field.element.getAttribute('aria-expanded') !== 'false') menu.dispatchEvent(new view.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+      const closed = await waitUntil(() => !menu.isConnected || !visible(menu), undefined, 900);
+      if (!closed) throw new Error('Feche o menu da lacuna para continuar.');
+    } finally { if (menuSession?.field.element === field.element) menuSession = null; }
+  }
+  function menuOptions(menu) {
+    return Array.from(menu.querySelectorAll('[role="option"]')).filter(option => visible(option) && option.getAttribute('aria-disabled') !== 'true')
+      .map(option => ({ text: clean(option.textContent), value: option.getAttribute('data-value') ?? clean(option.textContent), element: option }));
+  }
+  async function prepare(config = {}, { signal } = {}) {
+    aborted(signal);
+    if (preparing) return { warnings: [] };
+    preparing = true;
+    preparationWarnings = [];
+    try {
+      let groups;
+      try { groups = collectFieldGroups(config); }
+      catch { return { warnings: ['Um seletor CSS é inválido. Revise as opções avançadas.'] }; }
+      for (const group of groups.filter(group => group.kind === 'blanks')) {
+        if (group.fields.length > 20) continue;
+        const prompt = fieldPrompt(group.root, group.fields, 'blanks', group.settings);
+        const context = fieldContext(group, prompt);
+        for (const field of group.fields) {
+          aborted(signal);
+          if (field.type !== 'mui' || menuCache.get(field.element)?.context === context) continue;
+          let menu;
+          try {
+            menu = await openSelect(field, signal);
+            const options = menuOptions(menu);
+            if (!options.length || options.length > 30 || options.some(option => !option.text)) throw new Error('A lacuna não tem de 1 a 30 opções legíveis.');
+            menuCache.set(field.element, { context, options: options.map(({ text, value }) => ({ text, value })) });
+          } catch (error) {
+            aborted(signal);
+            preparationWarnings.push(error.message || 'Não foi possível ler uma lacuna.');
+          } finally {
+            const ownedMenu = menu || listboxFor(field.element);
+            if (ownedMenu) await closeSelect(field, ownedMenu);
+            else if (menuSession?.field.element === field.element) menuSession = null;
+          }
+        }
+      }
+      return { warnings: [...new Set(preparationWarnings)] };
+    } finally { preparing = false; }
+  }
+  function scan(config = {}) {
+    const choices = scanChoices(config);
+    const warnings = [...choices.warnings, ...preparationWarnings];
+    let groups;
+    try { groups = collectFieldGroups(config); }
+    catch { return choices; }
+    const questions = [...choices.questions];
+    for (const group of groups) {
+      if (group.kind === 'text' && (group.fields.length !== 1 || choices.questions.some(question => group.fields.some(field => question.element.contains(field.element))))) continue;
+      if (group.kind === 'blanks' && (group.fields.length < 1 || group.fields.length > 20)) continue;
+      const prompt = fieldPrompt(group.root, group.fields, group.kind, group.settings);
+      if (!prompt || prompt.length > 20000 || !prompt.replace(/\[Lacuna \d+\]/g, '').trim()) continue;
+      const context = fieldContext(group, prompt);
+      const options = group.kind === 'blanks' ? group.fields.map(field => descriptorOptions(field, context)) : [];
+      if (group.kind === 'blanks' && options.some(list => !list || list.length < 1 || list.length > 30 || list.some(option => !option.text))) {
+        warnings.push('As opções das lacunas ainda não foram lidas. Tente iniciar novamente.');
+        continue;
+      }
+      const limits = group.kind === 'text' ? limitsFor(group.fields[0].element, group.root) : {};
+      if (limits.invalid) {
+        warnings.push('Os limites de texto da questão são incompatíveis ou excedem 8.000 caracteres.');
+        continue;
+      }
+      const fingerprint = JSON.stringify([group.kind, prompt, group.kind === 'blanks' ? options.map(list => list.map(({ text, value }) => [text, value])) : limits]);
+      const question = { kind: group.kind, id: `q-${group.kind}:${uid(group.root)}`, prompt, element: group.root, fingerprint, options: [] };
+      if (group.kind === 'blanks') question.fields = group.fields.map((field, index) => ({ label: field.element.getAttribute('aria-label') || `Lacuna ${index + 1}`, element: field.element, options: options[index].map((option, optionIndex) => ({ index: optionIndex, text: option.text, element: option.element })) }));
+      else Object.assign(question, limits, { field: group.fields[0].element });
+      metadata.set(question, { kind: group.kind, group, prompt, fingerprint, context, options, limits, expectedValues: group.fields.map(fieldValue) });
+      if (group.root.querySelector('img,canvas,svg image,video')) warnings.push('Há conteúdo visual na questão; imagens e gráficos não são enviados ao modelo.');
+      questions.push(question);
+    }
+    questions.sort((a, b) => a.element === b.element ? 0 : (a.element.compareDocumentPosition(b.element) & 4) ? -1 : 1);
+    return { questions, warnings: [...new Set(warnings)] };
+  }
+  function isFormCurrent(question) {
+    const info = metadata.get(question);
+    if (!info || !info.group.root.isConnected) return false;
+    const { group } = info;
+    if (group.fields.some(field => !field.element.isConnected || !group.root.contains(field.element) || disabled(field.element) || (field.type === 'text' && field.element.readOnly))) return false;
+    const current = Array.from(group.root.querySelectorAll(group.kind === 'blanks' ? SELECTOR : TEXT_SELECTOR))
+      .filter(element => group.kind === 'blanks' ? formVisible(element, group.root) : textCandidate(element, group.root));
+    if (current.length !== group.fields.length || current.some((element, index) => element !== group.fields[index].element)) return false;
+    if (fieldPrompt(group.root, group.fields, group.kind, group.settings) !== info.prompt) return false;
+    if (!equal(group.fields.map(fieldValue), info.expectedValues)) return false;
+    if (group.kind === 'text') return JSON.stringify(limitsFor(group.fields[0].element, group.root)) === JSON.stringify(info.limits);
+    return group.fields.every((field, index) => {
+      const options = descriptorOptions(field, info.context);
+      return options && JSON.stringify(options.map(({ text, value }) => [text, value])) === JSON.stringify(info.options[index].map(({ text, value }) => [text, value]));
+    });
+  }
+  function isCurrent(question) {
+    const info = metadata.get(question);
+    return info?.kind === 'blanks' || info?.kind === 'text' ? isFormCurrent(question) : isChoiceCurrent(question);
+  }
+  function setNativeValue(field, value) {
+    const prototype = field.element.tagName === 'TEXTAREA' ? view.HTMLTextAreaElement.prototype : field.element.tagName === 'SELECT' ? view.HTMLSelectElement.prototype : view.HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, 'value').set.call(field.element, value);
+    field.element.dispatchEvent(new view.Event('input', { bubbles: true, composed: true }));
+    field.element.dispatchEvent(new view.Event('change', { bubbles: true, composed: true }));
+    field.element.blur();
+  }
+  function inlineClear(field) {
+    const base = field.element.closest('.MuiInputBase-root');
+    const wrapper = base?.parentElement;
+    if (!wrapper || wrapper.tagName !== 'SPAN' || !wrapper.contains(field.element)) return null;
+    const candidates = Array.from(wrapper.children).filter(element => element.matches('button.MuiIconButton-root') && !clean(element.textContent));
+    return candidates.length === 1 && !disabled(candidates[0]) ? candidates[0] : null;
+  }
+  async function writeField(info, index, value, signal) {
+    aborted(signal);
+    if (!isFormCurrentFromInfo(info)) throw new Error('A questão ou sua resposta mudou.');
+    const field = info.group.fields[index];
+    if (fieldValue(field) === value) return;
+    if (field.type !== 'mui') {
+      field.element.focus();
+      setNativeValue(field, value);
+      info.expectedValues[index] = value;
+      await settle();
+    } else if (value === '') {
+      const clear = inlineClear(field);
+      if (!clear) throw new Error('Esta lacuna não permite restaurar o vazio automaticamente.');
+      clear.click();
+      info.expectedValues[index] = '';
+      await settle();
+    } else {
+      let menu;
+      try {
+        menu = await openSelect(field, signal);
+        aborted(signal);
+        if (!isFormCurrentFromInfo(info)) throw new Error('A questão ou sua resposta mudou.');
+        const expected = info.options[index].find(option => option.value === value);
+        const matches = menuOptions(menu).filter(option => option.value === value && (!expected || option.text === expected.text));
+        if (matches.length !== 1) throw new Error('A palavra já não está disponível nesta lacuna.');
+        matches[0].element.click();
+        info.expectedValues[index] = value;
+        await settle();
+      } finally {
+        const ownedMenu = menu || listboxFor(field.element);
+        if (ownedMenu) await closeSelect(field, ownedMenu);
+        else if (menuSession?.field.element === field.element) menuSession = null;
+      }
+    }
+    if (!isFormCurrentFromInfo(info)) throw new Error('O site não confirmou o preenchimento. Revise a questão.');
+  }
+  function isFormCurrentFromInfo(info) { return isFormCurrent(info.question); }
+  async function applyForm(question, answer, { signal } = {}) {
+    const info = metadata.get(question);
+    if (!info || !isFormCurrent(question)) return { selected: false, message: 'A questão ou sua resposta mudou. Leia novamente.' };
+    info.question = question;
+    let target;
+    if (info.kind === 'blanks') {
+      if (!Array.isArray(answer) || answer.length !== info.group.fields.length || answer.some((index, fieldIndex) => !Number.isInteger(index) || index < 0 || index >= info.options[fieldIndex].length)) return { selected: false, message: 'As respostas das lacunas são inválidas. Nada foi preenchido.' };
+      target = answer.map((index, fieldIndex) => info.options[fieldIndex][index].value);
+    } else {
+      if (typeof answer !== 'string' || !answer.trim() || answer.length > info.limits.maxLength || answer.trim().length < info.limits.minLength) return { selected: false, message: 'O texto não respeita os limites da questão. Nada foi preenchido.' };
+      target = [answer];
+    }
+    if (signal?.aborted) return { selected: false, message: 'Operação cancelada.' };
+    const before = [...info.expectedValues];
+    let touched = false;
+    async function restore(values, operationSignal) {
+      if (!isFormCurrent(question)) throw new Error('A questão ou a resposta mudou. Não foi possível restaurar.');
+      // Free occupied bank words before restoring another field's former word.
+      for (let index = 0; index < values.length; index++) if (info.group.fields[index].type === 'mui' && info.expectedValues[index] && info.expectedValues[index] !== values[index]) {
+        touched = true;
+        await writeField(info, index, '', operationSignal);
+      }
+      for (let index = 0; index < values.length; index++) {
+        aborted(operationSignal);
+        if (info.expectedValues[index] !== values[index]) {
+          touched = true;
+          await writeField(info, index, values[index], operationSignal);
+        }
+      }
+    }
+    async function undo({ signal: undoSignal } = {}) {
+      try {
+        aborted(undoSignal);
+        if (!isFormCurrent(question)) return { restored: false, message: 'A questão ou a seleção mudou; não foi possível desfazer.' };
+        await restore(before, undoSignal);
+        return { restored: true, message: 'Resposta anterior restaurada.' };
+      } catch (error) { return { restored: false, message: error.message || 'O site não confirmou a restauração.' }; }
+    }
+    try {
+      await restore(target, signal);
+      return { selected: true, message: info.kind === 'text' ? 'Resposta escrita na página.' : 'Lacunas preenchidas na página.', ...(touched ? { undo } : {}) };
+    } catch (error) {
+      return { selected: false, message: error.message || 'Não foi possível preencher a resposta.', ...(touched ? { undo } : {}) };
+    }
+  }
+  async function apply(question, answer, options = {}) {
+    const kind = metadata.get(question)?.kind;
+    return kind === 'blanks' || kind === 'text' ? applyForm(question, answer, options) : applyChoice(question, answer, options);
+  }
+
+  return { scan, isCurrent, apply, prepare };
 }

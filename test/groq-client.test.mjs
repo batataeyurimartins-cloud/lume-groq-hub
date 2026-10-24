@@ -59,6 +59,90 @@ test('validates inputs without making a request', async () => {
   assert.equal(calls, 0);
 });
 
+const blanks = {
+  kind: 'blanks', prompt: 'Complete: variação [Lacuna 1] m/s; aceleração [Lacuna 2] m/s².',
+  fields: [
+    { label: 'Variação da velocidade', element: { private: true }, options: [{ text: '4', value: 'secret-id' }, { text: '8', element: {} }] },
+    { label: 'Aceleração média', options: [{ text: '2' }, { text: '4' }, { text: '8' }] },
+  ],
+};
+const details = { explanation: 'A variação é 8 m/s e a aceleração é 2 m/s².', confidence: 'high' };
+
+test('blank fields are solved together in field order and only readable data reaches Groq', async () => {
+  let body;
+  const result = { selections: [1, 0], ...details };
+  const client = createGroqClient({ fetchImpl: async (_, options) => { body = JSON.parse(options.body); return ok(result); } });
+  assert.deepEqual(await client.solve(input({ question: blanks })), result);
+  const sent = JSON.parse(body.messages[1].content);
+  assert.deepEqual(sent, { kind: 'blanks', prompt: blanks.prompt, fields: blanks.fields.map((field, index) => ({ index, label: field.label, options: field.options.map((option, index) => ({ index, text: option.text })) })) });
+  assert.ok(!JSON.stringify(sent).includes('secret-id'));
+  assert.ok(!JSON.stringify(sent).includes('element'));
+  assert.match(body.messages[0].content, /selections/);
+  assert.match(body.messages[0].content, /text/);
+  const repeated = createGroqClient({ fetchImpl: async () => ok({ ...details, selections: [1, 1] }) });
+  assert.deepEqual((await repeated.solve(input({ question: blanks }))).selections, [1, 1], 'Different blanks may use the same option index');
+  const abstaining = createGroqClient({ fetchImpl: async () => ok({ ...details, selections: [] }) });
+  assert.deepEqual((await abstaining.solve(input({ question: blanks }))).selections, []);
+  const remaining = createGroqClient({ fetchImpl: async () => ok({ ...details, selections: [0] }) });
+  assert.deepEqual((await remaining.solve(input({ question: { ...blanks, fields: [{ label: '', options: [{ text: '8' }] }] } }))).selections, [0]);
+});
+
+test('partial, out-of-range and wrong-kind blank answers never reach the page', async () => {
+  for (const result of [
+    { selections: [1], ...details }, { selections: [2, 0], ...details }, { selections: [-1, 0], ...details },
+    { selections: ['1', 0], ...details }, { selections: [0.5, 0], ...details },
+    { selections: [1, 0, 0], ...details }, { indices: [1], ...details },
+    { selections: [1, 0], text: 'wrong type', ...details }, { selections: null, ...details },
+  ]) {
+    const client = createGroqClient({ fetchImpl: async () => ok(result) });
+    await assert.rejects(client.solve(input({ question: blanks })), hasCode('FORMAT'));
+  }
+});
+
+test('text answers honor field limits, omit DOM data and permit explicit abstention', async () => {
+  let sent;
+  const textQuestion = { kind: 'text', prompt: 'Explique a diferença entre distância e deslocamento.', minLength: 10, maxLength: 200, element: { private: true }, value: 'existing draft' };
+  const result = { text: '  Distância mede o caminho percorrido; deslocamento liga a posição inicial à final.  ', ...details };
+  const client = createGroqClient({ fetchImpl: async (_, options) => { sent = JSON.parse(JSON.parse(options.body).messages[1].content); return ok(result); } });
+  assert.deepEqual(await client.solve(input({ question: textQuestion })), { ...result, text: result.text.trim() });
+  assert.deepEqual(sent, { kind: 'text', prompt: textQuestion.prompt, minLength: 10, maxLength: 200 });
+  const abstaining = createGroqClient({ fetchImpl: async () => ok({ text: '   ', ...details }) });
+  assert.equal((await abstaining.solve(input({ question: textQuestion }))).text, '');
+  const defaults = createGroqClient({ fetchImpl: async (_, options) => { sent = JSON.parse(JSON.parse(options.body).messages[1].content); return ok({ text: 'Resposta curta.', ...details }); } });
+  await defaults.solve(input({ question: { kind: 'text', prompt: textQuestion.prompt } }));
+  assert.equal(sent.maxLength, 3000);
+  assert.equal(sent.minLength, 0);
+});
+
+test('invalid new-format inputs fail before a request is sent', async () => {
+  let calls = 0;
+  const client = createGroqClient({ fetchImpl: async () => { calls++; return ok(); } });
+  for (const invalidQuestion of [
+    { ...blanks, fields: [] }, { ...blanks, fields: Array(21).fill(blanks.fields[0]) },
+    { ...blanks, fields: [{ label: 'x', options: [] }] },
+    { ...blanks, fields: [{ label: 'x'.repeat(1001), options: [{ text: 'A' }, { text: 'B' }] }] },
+    { ...blanks, fields: [{ label: 'x', options: [{ text: '' }, { text: 'B' }] }] },
+    { ...blanks, fields: new Array(1) },
+    { kind: 'text', prompt: 'Explique.', maxLength: 0 }, { kind: 'text', prompt: 'Explique.', maxLength: 8001 },
+    { kind: 'text', prompt: 'Explique.', maxLength: 20, minLength: 21 }, { kind: 'text', prompt: 'Explique.', minLength: -1 },
+    { kind: 'text', prompt: 'Explique.', maxLength: '100' }, { kind: 'unknown', prompt: 'x' },
+    { kind: 'text', prompt: 'Explique.', maxLength: null }, { ...question, kind: null },
+  ]) await assert.rejects(client.solve(input({ question: invalidQuestion })), hasCode('INPUT'));
+  assert.equal(calls, 0);
+});
+
+test('text response validation rejects oversized, undersized and wrong-kind output', async () => {
+  const textQuestion = { kind: 'text', prompt: 'Explique.', minLength: 5, maxLength: 20 };
+  for (const result of [
+    { text: 'x'.repeat(21), ...details }, { text: 'abc', ...details }, { text: 2, ...details },
+    { indices: [0], ...details }, { text: 'Texto válido', selections: [0], ...details },
+    { text: 'Texto válido', indices: [], ...details }, { text: 'Texto válido', explanation: '', confidence: 'high' },
+  ]) {
+    const client = createGroqClient({ fetchImpl: async () => ok(result) });
+    await assert.rejects(client.solve(input({ question: textQuestion })), hasCode('FORMAT'));
+  }
+});
+
 test('retries rate limiting once and respects Retry-After', async () => {
   let calls = 0;
   const client = createGroqClient({ retryDelayMs: 0, fetchImpl: async () => ++calls === 1
