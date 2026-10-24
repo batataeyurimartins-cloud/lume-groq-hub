@@ -1,6 +1,6 @@
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.2.1';
+  const version = '3.3.0';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
@@ -178,7 +178,7 @@ function mountLumeHub() {
         const pageUrl = location.href;
         if (!adapter.isCurrent(question)) { state.dirty = true; break; }
         const kind = question.kind || 'choice';
-        notify(kind === 'text' ? 'Questão de texto detectada' : kind === 'blanks' ? 'Lacunas detectadas' : 'Questão detectada');
+        notify(kind === 'text' ? 'Questão de texto detectada' : kind === 'blanks' ? 'Lacunas detectadas' : kind === 'order' ? 'Blocos de palavras detectados' : 'Questão detectada');
         status('Buscando resposta…');
         notify('Buscando resposta…');
         let querying = true;
@@ -194,7 +194,7 @@ function mountLumeHub() {
             state.dirty = true;
             break;
           }
-          const payload = kind === 'text' ? answer.text : kind === 'blanks' ? answer.selections : answer.indices;
+          const payload = kind === 'text' ? answer.text : kind === 'blanks' ? answer.selections : kind === 'order' ? answer.order : answer.indices;
           if (kind === 'text' ? typeof payload !== 'string' || !payload.trim() : !Array.isArray(payload) || !payload.length) {
             state.handled.set(key, { status: 'skipped' });
             notify('Sem resposta suficiente. Questão ignorada.');
@@ -205,7 +205,7 @@ function mountLumeHub() {
             continue;
           }
           notify(answer.confidence === 'low' ? 'Resposta detectada · confiança baixa' : 'Resposta detectada');
-          const filling = kind === 'text' || kind === 'blanks' ? 'Preenchendo respostas…' : 'Marcando respostas…';
+          const filling = kind === 'order' ? 'Ordenando palavras…' : kind === 'text' || kind === 'blanks' ? 'Preenchendo respostas…' : 'Marcando respostas…';
           status(filling);
           notify(filling);
           const outcome = await adapter.apply(question, payload, { signal: controller.signal });
@@ -292,6 +292,7 @@ function mountLumeHub() {
     state.active = false;
     state.run++;
     state.controller?.abort();
+    adapter.destroy?.();
     events.abort();
     observer.disconnect();
     clearTimeout(state.timer);

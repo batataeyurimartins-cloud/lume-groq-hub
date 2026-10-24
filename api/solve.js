@@ -159,14 +159,14 @@ function validateBody(body, env) {
   if (typeof question.prompt !== 'string' || !question.prompt.trim() || question.prompt.length > 20000) {
     throw apiError('INPUT', 'A questão precisa ter um enunciado legível de até 20000 caracteres.');
   }
-  const cleanOptions = (options, minimum = 2) => {
-    if (!Array.isArray(options) || options.length < minimum || options.length > 30) {
-      throw apiError('INPUT', `Cada grupo precisa ter de ${minimum} a 30 alternativas.`);
+  const cleanOptions = (options, minimum = 2, maximum = 30, maxTextLength = 4000) => {
+    if (!Array.isArray(options) || options.length < minimum || options.length > maximum) {
+      throw apiError('INPUT', `Cada grupo precisa ter de ${minimum} a ${maximum} alternativas.`);
     }
     return options.map(option => {
       if (!option || typeof option !== 'object' || Array.isArray(option)
-          || typeof option.text !== 'string' || !option.text.trim() || option.text.length > 4000) {
-        throw apiError('INPUT', 'Cada alternativa precisa ter texto legível de até 4000 caracteres.');
+          || typeof option.text !== 'string' || !option.text.trim() || option.text.length > maxTextLength) {
+        throw apiError('INPUT', `Cada alternativa precisa ter texto legível de até ${maxTextLength} caracteres.`);
       }
       return { text: option.text };
     });
@@ -189,6 +189,8 @@ function validateBody(body, env) {
       return { label: field.label, options: cleanOptions(field.options, 1) };
     });
     cleanQuestion = { kind, prompt: question.prompt, fields };
+  } else if (kind === 'order') {
+    cleanQuestion = { kind, prompt: question.prompt, options: cleanOptions(question.options, 2, 60, 1000) };
   } else if (kind === 'text') {
     const maxLength = question.maxLength === undefined ? 3000 : question.maxLength;
     const minLength = question.minLength === undefined ? 0 : question.minLength;
@@ -223,6 +225,13 @@ function projectAnswer(answer, question) {
         || (answer.selections.length !== 0 && answer.selections.length !== question.fields.length)
         || answer.selections.some((index, field) => !Number.isInteger(index) || index < 0 || index >= question.fields[field].options.length)) throw invalid();
     return { selections: [...answer.selections], ...common };
+  }
+  if (question.kind === 'order') {
+    if (!Array.isArray(answer.order)
+        || (answer.order.length !== 0 && answer.order.length !== question.options.length)
+        || new Set(answer.order).size !== answer.order.length
+        || answer.order.some(index => !Number.isInteger(index) || index < 0 || index >= question.options.length)) throw invalid();
+    return { order: [...answer.order], ...common };
   }
   if (!Array.isArray(answer.indices) || new Set(answer.indices).size !== answer.indices.length
       || answer.indices.some(index => !Number.isInteger(index) || index < 0 || index >= question.options.length)

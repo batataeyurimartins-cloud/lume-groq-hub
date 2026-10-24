@@ -143,6 +143,59 @@ test('text response validation rejects oversized, undersized and wrong-kind outp
   }
 });
 
+const orderQuestion = {
+  kind: 'order', prompt: 'Organize os blocos para formar a frase.', element: { private: true },
+  options: [{ text: 'a', value: 'private-id' }, { text: 'casa', element: {} }, { text: 'a' }],
+};
+
+test('order questions preserve duplicate blocks as distinct indices and send only readable data', async () => {
+  let body;
+  const result = { order: [2, 1, 0], ...details };
+  const client = createGroqClient({ fetchImpl: async (_, options) => { body = JSON.parse(options.body); return ok({ ...result, notes: 'discarded metadata' }); } });
+  assert.deepEqual(await client.solve(input({ question: orderQuestion })), result);
+  assert.deepEqual(JSON.parse(body.messages[1].content), { kind: 'order', prompt: orderQuestion.prompt, options: [{ index: 0, text: 'a' }, { index: 1, text: 'casa' }, { index: 2, text: 'a' }] });
+  assert.match(body.messages[0].content, /kind="order"/);
+  assert.match(body.messages[0].content, /cada índice exatamente uma vez/);
+  assert.ok(!body.messages[1].content.includes('private'));
+  const abstaining = createGroqClient({ fetchImpl: async () => ok({ order: [], ...details }) });
+  assert.deepEqual((await abstaining.solve(input({ question: orderQuestion }))).order, []);
+});
+
+test('order output requires a full numeric permutation and rejects mixed answer kinds', async () => {
+  for (const result of [
+    { order: [0, 1], ...details }, { order: [0, 1, 1], ...details }, { order: [0, 1, 3], ...details },
+    { order: [0, 1, -1], ...details }, { order: [0, 1, 1.5], ...details }, { order: ['a', 'casa', 'a'], ...details },
+    { order: ['0', 1, 2], ...details }, { order: null, ...details }, { indices: [0, 1, 2], ...details },
+    { order: [2, 1, 0], indices: [], ...details }, { order: [2, 1, 0], selections: [], ...details },
+    { order: [2, 1, 0], text: 'a casa a', ...details },
+  ]) {
+    const client = createGroqClient({ fetchImpl: async () => ok(result) });
+    await assert.rejects(client.solve(input({ question: orderQuestion })), hasCode('FORMAT'));
+  }
+  for (const [question, result] of [
+    [blanks, { selections: [1, 0], order: [], ...details }],
+    [{ kind: 'text', prompt: 'Explique.' }, { text: 'Resposta válida.', order: [], ...details }],
+  ]) {
+    const client = createGroqClient({ fetchImpl: async () => ok(result) });
+    await assert.rejects(client.solve(input({ question })), hasCode('FORMAT'));
+  }
+});
+
+test('order input is bounded to 2–60 blocks of at most 1000 characters and 32000 total JSON characters', async () => {
+  let calls = 0;
+  const client = createGroqClient({ fetchImpl: async () => { calls++; return ok({ order: [], ...details }); } });
+  for (const options of [
+    [], [{ text: 'one' }], Array(61).fill({ text: 'x' }),
+    [{ text: ' ' }, { text: 'x' }], [{ text: 'x'.repeat(1001) }, { text: 'x' }],
+    new Array(2), Array(60).fill({ text: 'x'.repeat(600) }),
+  ]) await assert.rejects(client.solve(input({ question: { ...orderQuestion, options } })), hasCode('INPUT'));
+  assert.equal(calls, 0);
+  const maximum = Array.from({ length: 60 }, (_, index) => ({ text: `bloco ${index}` }));
+  const result = await client.solve(input({ question: { ...orderQuestion, options: maximum } }));
+  assert.deepEqual(result.order, []);
+  assert.equal(calls, 1);
+});
+
 test('retries rate limiting once and respects Retry-After', async () => {
   let calls = 0;
   const client = createGroqClient({ retryDelayMs: 0, fetchImpl: async () => ++calls === 1

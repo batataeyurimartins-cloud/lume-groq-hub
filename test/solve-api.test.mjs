@@ -197,6 +197,73 @@ test('a remaining blank may have one option while choice questions still require
   assert.equal(choice.res.statusCode,400);
 });
 
+test('word-bank order questions preserve repeated blocks and project only their ordered indices',async()=>{
+  const clean={kind:'order',prompt:'Organize os blocos para formar uma frase.',options:[{text:'o'},{text:'gato'},{text:'viu'},{text:'o'},{text:'rato'}]};
+  const dirty={...clean,element:{private:'DOM'},values:['private'],fields:[{private:'field'}],options:clean.options.map((option,index)=>({...option,value:`private-${index}`,element:{private:'element'},id:index}))};
+  const output={order:[0,1,2,3,4],explanation:'A frase foi organizada.',confidence:'high'};
+  let received;
+  const handler=createSolveHandler({env,client:{solve:async input=>{
+    received=input.question;
+    return {...output,indices:[0],selections:[1],text:'not applicable',providerPrivate:env.GROQ_API_KEY};
+  }}});
+  const {res}=await invoke({handler,body:{question:dirty}});
+  assert.equal(res.statusCode,200);
+  assert.deepEqual(received,clean);
+  assert.equal(received.options.length,5,'Identical block texts must retain their separate positions');
+  assert.deepEqual(res.body,output);
+  assert.ok(!res.text.includes(env.GROQ_API_KEY));
+});
+
+test('word-bank order limits allow sixty blocks and reject invalid sizes or text before provider usage',async()=>{
+  const base={kind:'order',prompt:'Organize estes blocos.',options:[{text:'A'},{text:'B'}]};
+  const sixty={...base,options:Array.from({length:60},(_,index)=>({text:`Bloco ${index}`}))};
+  let calls=0;
+  const handler=createSolveHandler({env,client:{solve:async input=>{
+    calls++;
+    return {order:input.question.options.map((_,index)=>index),explanation:'Blocos organizados.',confidence:'high'};
+  }}});
+  const allowed=await invoke({handler,body:{question:sixty}});
+  assert.equal(allowed.res.statusCode,200);
+  assert.deepEqual(allowed.res.body.order,Array.from({length:60},(_,index)=>index));
+  const maxText=await invoke({handler,body:{question:{...base,options:[{text:'x'.repeat(1000)},{text:'B'}]}}});
+  assert.equal(maxText.res.statusCode,200);
+  const invalid=[
+    {...base,options:[]}, {...base,options:[{text:'A'}]},
+    {...base,options:Array(61).fill({text:'A'})},
+    {...base,options:[{text:''},{text:'B'}]}, {...base,options:[{text:'   '},{text:'B'}]},
+    {...base,options:[{text:'x'.repeat(1001)},{text:'B'}]},
+    {...base,options:[{text:1},{text:'B'}]}, {...base,options:[null,{text:'B'}]},
+    {...base,options:Array(33).fill({text:'x'.repeat(1000)})},
+  ];
+  for(const candidate of invalid) {
+    const {res}=await invoke({handler,body:{question:candidate}});
+    assert.equal(res.statusCode,400);
+    assert.equal(res.body.error.code,'INPUT');
+  }
+  assert.equal(calls,2);
+});
+
+test('word-bank order answers require a full permutation or abstention',async()=>{
+  const candidate={kind:'order',prompt:'Organize os blocos.',options:[{text:'A'},{text:'B'},{text:'A'}]};
+  const common={explanation:'Justificativa.',confidence:'high'};
+  const cases=[
+    [{order:[]},200], [{order:[2,0,1]},200],
+    [{order:[0,1]},502], [{order:[0,0,2]},502], [{order:[0,1,3]},502],
+    [{order:[-1,0,1]},502], [{order:[0,1,'2']},502], [{order:[0,1,1.5]},502],
+    [{order:[0,1,2,3]},502], [{order:'0,1,2'},502], [{order:null},502],
+    [{indices:[0,1,2]},502], [{selections:[0,1,2]},502], [{text:'A B A'},502],
+  ];
+  for(const [fields,status] of cases) {
+    const output={...fields,...common};
+    const handler=createSolveHandler({env,client:{solve:async()=>({...output,providerPrivate:'not forwarded'})}});
+    const {res}=await invoke({handler,body:{question:candidate}});
+    assert.equal(res.statusCode,status);
+    assert.ok(!res.text.includes('not forwarded'));
+    if(status===200)assert.deepEqual(res.body,output);
+    else assert.equal(res.body.error.code,'FORMAT');
+  }
+});
+
 test('text questions support defaults and explicit character limits without forwarding DOM content',async()=>{
   for(const [input,expected] of [
     [{kind:'text',prompt:'Explique distância e deslocamento.',element:{private:'DOM'},options:[{text:'ignored'}]}, {kind:'text',prompt:'Explique distância e deslocamento.',maxLength:3000,minLength:0}],

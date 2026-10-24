@@ -1,6 +1,6 @@
 # Lume · Favorito automático com Groq
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê as questões, marca alternativas e preenche lacunas e respostas de texto, com notificações em cada etapa. Versão **3.2.1**.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos e monta frases com blocos de palavras, com notificações em cada etapa. Versão **3.3.0**.
 
 ## Instalar o bookmarklet
 
@@ -21,6 +21,7 @@ Após uma atualização, feche o hub no **×** e clique no mesmo favorito para c
 - As notificações mostram **Questão detectada**, **Buscando resposta…**, **Resposta detectada**, **Marcando respostas…** e **Respostas: 1**, **Respostas: 2**, etc. O contador aumenta somente após confirmar a marcação da questão.
 - Nas lacunas, o hub abre os menus para ler as opções, fecha-os e consulta a Groq uma vez para o conjunto. Depois preenche cada campo, mesmo quando a Sala remove as palavras escolhidas dos outros menus. O contador aumenta uma vez pela questão completa.
 - Nas questões de texto, preenche o campo **Responder** respeitando os limites de caracteres. As notificações mostram **Questão de texto detectada** e **Preenchendo respostas…**.
+- Nos blocos de palavras **CLOUD**, lê o banco completo e clica nos blocos na ordem da frase. Palavras repetidas são preservadas como blocos diferentes. Mostra **Ordenando palavras…** e conta uma resposta após confirmar toda a sequência. **Desfazer** restaura a seleção anterior, inclusive uma frase parcialmente montada.
 - **Desfazer** pausa o automático e restaura a última seleção quando a questão e a seleção continuam iguais.
 - A engrenagem **Ajustes** permite escolher o modelo e indicar seletores personalizados, se necessário.
 - Arraste o cabeçalho para mover o painel. Use minimizar ou `Alt+Shift+G` para mostrar/ocultar. Fechar cancela as solicitações e remove o hub da página.
@@ -53,7 +54,9 @@ Os componentes **FILL_WORDS**, **TEXT** e **TEXT_AI** da Sala também são recon
 
 Nas discursivas, o formulário real inclui um campo invisível chamado `hidden`. O leitor verifica o atributo HTML de ocultação para não confundir esse campo com o formulário inteiro. Limites de caracteres são lidos por rótulo; um máximo não informado usa o padrão de 3.000 caracteres, sem capturar o contador vizinho. Quando a IA se abstém de escrever, a notificação mostra o motivo.
 
-Redações em editores próprios, ordenação, arrastar e soltar, canvas, Shadow DOM de outros componentes e frames de outro domínio podem exigir adaptadores específicos. Não há OCR: imagens, gráficos, áudio e vídeo não são enviados ao modelo.
+O formato **CLOUD** é identificado pelo painel **Resposta do Aluno** e seu banco de palavras. O leitor inclui os blocos já selecionados que a Sala mantém ocultos no banco, e usa os botões das palavras para restaurar a resposta. Não aciona a entrega da atividade.
+
+Redações em editores próprios, outros formatos de ordenação por arrastar e soltar, canvas, Shadow DOM de outros componentes e frames de outro domínio podem exigir adaptadores específicos. Não há OCR: imagens, gráficos, áudio e vídeo não são enviados ao modelo.
 
 Nos seletores personalizados, indique o bloco de cada questão, o enunciado dentro dele e os controles de alternativas. Exemplo da demonstração:
 

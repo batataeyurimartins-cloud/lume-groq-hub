@@ -131,3 +131,51 @@ test('hosted validation rejects malformed field inputs before network and keeps 
   assert.equal(sent.question.kind,undefined);
   assert.deepEqual(sent.question.options,[{text:'3'},{text:'4'}]);
 });
+
+const orderQuestion={kind:'order',prompt:'Organize os blocos da frase.',element:{private:true},options:[
+  {text:'a',value:'private-id'},{text:'casa',element:{}},{text:'a'},
+]};
+
+test('hosted ordering keeps duplicate text blocks distinct and strips DOM data',async()=>{
+  let sent;
+  const client=createHostedClient({endpoint,public:true,fetchImpl:async(_,options)=>{
+    sent=JSON.parse(options.body);
+    return Response.json({order:[2,1,0],...details,notes:'discarded metadata'});
+  }});
+  assert.deepEqual(await client.solve({question:orderQuestion}),{order:[2,1,0],...details});
+  assert.deepEqual(sent.question,{kind:'order',prompt:orderQuestion.prompt,options:[{text:'a'},{text:'casa'},{text:'a'}]});
+  assert.ok(!JSON.stringify(sent).includes('private'));
+  const abstaining=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json({order:[],...details})});
+  assert.deepEqual((await abstaining.solve({question:orderQuestion})).order,[]);
+});
+
+test('hosted ordering rejects partial, repeated, nonnumeric and mixed-kind answers',async()=>{
+  for(const result of [
+    {order:[0,1],...details},{order:[0,1,1],...details},{order:[0,1,3],...details},
+    {order:[0,1,-1],...details},{order:[0,1,1.5],...details},{order:['a','casa','a'],...details},
+    {order:['0',1,2],...details},{order:null,...details},{indices:[0,1,2],...details},
+    {order:[2,1,0],indices:[],...details},{order:[2,1,0],selections:[],...details},{order:[2,1,0],text:'a casa a',...details},
+  ]){
+    const client=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json(result)});
+    await assert.rejects(client.solve({question:orderQuestion}),error=>error.code==='FORMAT');
+  }
+  for(const [question,result] of [
+    [blanks,{selections:[1,0],order:[],...details}],
+    [{kind:'text',prompt:'Explique.'},{text:'Resposta válida.',order:[],...details}],
+  ]){
+    const client=createHostedClient({endpoint,public:true,fetchImpl:async()=>Response.json(result)});
+    await assert.rejects(client.solve({question}),error=>error.code==='FORMAT');
+  }
+});
+
+test('hosted ordering validates block count, text and total size before network',async()=>{
+  let calls=0;
+  const client=createHostedClient({endpoint,public:true,fetchImpl:async()=>{calls++;return Response.json({order:[],...details});}});
+  for(const options of [
+    [],[{text:'one'}],Array(61).fill({text:'x'}),[{text:''},{text:'x'}],
+    [{text:'x'.repeat(1001)},{text:'x'}],new Array(2),Array(60).fill({text:'x'.repeat(600)}),
+  ])await assert.rejects(client.solve({question:{...orderQuestion,options}}),error=>error.code==='INPUT');
+  assert.equal(calls,0);
+  await client.solve({question:{...orderQuestion,options:Array.from({length:60},(_,index)=>({text:`bloco ${index}`}))}});
+  assert.equal(calls,1);
+});

@@ -567,6 +567,9 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
       if (group.root.querySelector('img,canvas,svg image,video')) warnings.push('Há conteúdo visual na questão; imagens e gráficos não são enviados ao modelo.');
       questions.push(question);
     }
+    const ordering = scanOrders(config);
+    questions.push(...ordering.questions);
+    warnings.push(...ordering.warnings);
     questions.sort((a, b) => a.element === b.element ? 0 : (a.element.compareDocumentPosition(b.element) & 4) ? -1 : 1);
     return { questions, warnings: [...new Set(warnings)] };
   }
@@ -588,6 +591,7 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   }
   function isCurrent(question) {
     const info = metadata.get(question);
+    if (info?.kind === 'order') return isOrderCurrent(info);
     return info?.kind === 'blanks' || info?.kind === 'text' ? isFormCurrent(question) : isChoiceCurrent(question);
   }
   function setNativeValue(field, value) {
@@ -688,8 +692,177 @@ export function createPageAdapter({ document: doc = document, exclude = null } =
   }
   async function apply(question, answer, options = {}) {
     const kind = metadata.get(question)?.kind;
+    if (kind === 'order') return applyOrder(question, answer, options);
     return kind === 'blanks' || kind === 'text' ? applyForm(question, answer, options) : applyChoice(question, answer, options);
   }
 
-  return { scan, isCurrent, apply, prepare };
+  // CLOUD keeps every word in a fixed bank, hiding the words in the answer.
+  // Its word buttons remove individual selections; no drag or submission is
+  // needed. Only this two-panel structure anchored by its own heading is used.
+  const orderEntries = new WeakMap();
+  const orderBindings = new Set();
+  function bankWords(bank) {
+    return Array.from(bank.children).filter(element => element.matches('.MuiBox-root') &&
+      clean(Array.from(element.childNodes).filter(node => node.nodeType === 3).map(node => node.textContent).join(' ')) &&
+      !element.querySelector('button,input,textarea,select') && view.getComputedStyle(element).cursor === 'pointer');
+  }
+  function orderPrompt(entry, settings) {
+    let scope = entry.root;
+    if (settings.promptSelector) scope = entry.root.querySelector(settings.promptSelector) || scope;
+    function visit(node) {
+      if (node.nodeType === 3) return node.textContent;
+      if (node.nodeType !== 1 || node === entry.grid || isExcluded(node) || !formVisible(node, entry.root) ||
+          node.matches('script,style,button,svg,input,textarea,select,nav,header,footer')) return '';
+      return Array.from(node.childNodes).map(visit).join(' ');
+    }
+    return clean(visit(scope));
+  }
+  function orderState(entry) {
+    const words = bankWords(entry.bank);
+    const texts = words.map(element => clean(element.textContent));
+    const used = words.map(element => element.hasAttribute('hidden') || view.getComputedStyle(element).display === 'none');
+    const buttons = Array.from(entry.answer.querySelectorAll('button.MuiIconButton-root'))
+      .filter(button => !button.querySelector('svg') && clean(button.textContent));
+    const labels = buttons.map(button => clean(button.textContent));
+    const available = used.map((selected, index) => selected ? index : -1).filter(index => index >= 0);
+    const order = [];
+    for (const label of labels) {
+      const position = available.findIndex(index => texts[index] === label);
+      if (position < 0) return null;
+      order.push(available.splice(position, 1)[0]);
+    }
+    if (available.length || !equal(texts, entry.words)) return null;
+    return { words, buttons, labels, used, order };
+  }
+  const orderSnapshot = state => ({ labels: [...state.labels], used: [...state.used] });
+  const sameOrderState = (state, expected) => state && equal(state.labels, expected.labels) && equal(state.used, expected.used);
+  function orderStructureCurrent(info) {
+    const entry = info.entry;
+    return entry.live && entry.grid.isConnected && entry.root.isConnected && entry.root.contains(entry.grid) &&
+      entry.grid.contains(entry.answer) && entry.grid.contains(entry.bank) && entry.version === info.version &&
+      (view.location?.href || '') === info.url && orderPrompt(entry, info.settings) === info.prompt;
+  }
+  function isOrderCurrent(info) {
+    return orderStructureCurrent(info) && sameOrderState(orderState(info.entry), info.expected);
+  }
+  function scanOrders(config) {
+    const settings = formSettings(config);
+    const questions = [], warnings = [];
+    for (const entry of orderBindings) if (!entry.grid.isConnected) {
+      entry.controller.abort(); entry.live = false; orderBindings.delete(entry);
+    }
+    for (const label of doc.querySelectorAll('.MuiTypography-root')) {
+      if (clean(label.textContent) !== 'Resposta do Aluno' || !visible(label) || isExcluded(label)) continue;
+      let grid = label.closest('.MuiGrid-container');
+      let panels;
+      while (grid) {
+        panels = Array.from(grid.children).filter(element => element.matches('.MuiGrid-item'));
+        if (panels.length === 2 && panels[0].contains(label) && bankWords(panels[1]).length >= 2) break;
+        grid = grid.parentElement?.closest('.MuiGrid-container');
+      }
+      if (!grid) continue;
+      const root = fieldRoot(grid, settings);
+      if (!root || !visible(root) || root.matches('body,html') || !root.contains(grid)) continue;
+      const words = bankWords(panels[1]).map(element => clean(element.textContent));
+      if (words.length < 2 || words.length > 60 || words.some(word => !word || word.length > 1000)) {
+        warnings.push('Este banco de palavras excede os limites de leitura.'); continue;
+      }
+      let entry = orderEntries.get(grid);
+      if (!entry || !entry.live || entry.root !== root || entry.answer !== panels[0] || entry.bank !== panels[1] || !equal(words, entry.words)) {
+        if (entry) { entry.controller.abort(); entry.live = false; orderBindings.delete(entry); }
+        entry = { root, grid, answer: panels[0], bank: panels[1], words, version: 0, owned: false, live: true, controller: new view.AbortController() };
+        const interact = event => {
+          if (entry.owned) return;
+          const target = event.target;
+          if ((entry.answer.contains(target) && target.closest?.('button')) || bankWords(entry.bank).some(word => word.contains(target))) entry.version++;
+        };
+        for (const panel of panels) panel.addEventListener('click', interact, { capture: true, signal: entry.controller.signal });
+        orderEntries.set(grid, entry); orderBindings.add(entry);
+      }
+      const prompt = orderPrompt(entry, settings);
+      if (!prompt || prompt.length > 20000) continue;
+      const state = orderState(entry);
+      if (!state) { warnings.push('Não foi possível reconhecer a ordem atual dos blocos.'); continue; }
+      const question = { kind: 'order', id: `q-order:${uid(grid)}`, element: root, prompt,
+        options: words.map((text, index) => ({ index, text, element: state.words[index] })),
+        fingerprint: JSON.stringify(['order', prompt, words]) };
+      metadata.set(question, { kind: 'order', entry, settings, prompt, version: entry.version, url: view.location?.href || '', expected: orderSnapshot(state) });
+      questions.push(question);
+    }
+    return { questions, warnings };
+  }
+  async function applyOrder(question, order, { signal } = {}) {
+    const info = metadata.get(question);
+    if (!info || !isOrderCurrent(info)) return { selected: false, message: 'Os blocos ou sua resposta mudaram. Leia novamente.' };
+    const count = info.entry.words.length;
+    if (!Array.isArray(order) || order.length !== count || new Set(order).size !== count ||
+        order.some(index => !Number.isInteger(index) || index < 0 || index >= count)) {
+      return { selected: false, message: 'A ordem dos blocos é inválida. Nada foi alterado.' };
+    }
+    const before = [...orderState(info.entry).order];
+    let touched = false;
+    async function click(target, expected, operationSignal) {
+      aborted(operationSignal);
+      if (!isOrderCurrent(info) || disabled(target) || !formVisible(target, info.entry.root) || view.getComputedStyle(target).pointerEvents === 'none') {
+        throw new Error('O bloco foi alterado ou está indisponível.');
+      }
+      info.entry.owned = true;
+      try { target.click(); touched = true; } finally { info.entry.owned = false; }
+      await settle();
+      if (!orderStructureCurrent(info)) throw new Error('A questão ou a resposta mudou durante a ordenação.');
+      const state = orderState(info.entry);
+      if (!state) throw new Error('O site não confirmou os blocos selecionados.');
+      info.expected = orderSnapshot(state);
+      if (!sameOrderState(state, expected)) throw new Error('O site não confirmou a ordem dos blocos.');
+      aborted(operationSignal);
+    }
+    async function restore(indices, operationSignal) {
+      aborted(operationSignal);
+      if (!isOrderCurrent(info)) throw new Error('A questão ou a resposta mudou.');
+      const desired = { labels: indices.map(index => info.entry.words[index]), used: info.entry.words.map((_, index) => indices.includes(index)) };
+      let state = orderState(info.entry);
+      if (sameOrderState(state, desired)) return;
+      while (state.buttons.length) {
+        const last = state.buttons.length - 1;
+        // With repeated words the DOM exposes the selected label, not its id.
+        // Read the observed bank again after each removal before proceeding.
+        const expectedLabels = state.labels.slice(0, last);
+        const target = state.buttons[last];
+        aborted(operationSignal);
+        if (!isOrderCurrent(info) || disabled(target) || !formVisible(target, info.entry.root) || view.getComputedStyle(target).pointerEvents === 'none') throw new Error('Não foi possível remover um bloco.');
+        info.entry.owned = true;
+        try { target.click(); touched = true; } finally { info.entry.owned = false; }
+        await settle();
+        if (!orderStructureCurrent(info)) throw new Error('A questão ou a resposta mudou durante a ordenação.');
+        state = orderState(info.entry);
+        if (!state) throw new Error('O site não confirmou a remoção do bloco.');
+        info.expected = orderSnapshot(state);
+        if (!equal(state.labels, expectedLabels)) throw new Error('O site não confirmou a remoção do bloco.');
+      }
+      for (const index of indices) {
+        aborted(operationSignal);
+        state = orderState(info.entry);
+        const expected = { labels: [...state.labels, info.entry.words[index]], used: state.used.map((used, position) => used || position === index) };
+        await click(state.words[index], expected, operationSignal);
+      }
+      aborted(operationSignal);
+      if (!isOrderCurrent(info) || !sameOrderState(orderState(info.entry), desired)) throw new Error('A ordem final não foi confirmada.');
+    }
+    async function undo({ signal: undoSignal } = {}) {
+      try { await restore(before, undoSignal); return { restored: true, message: 'Ordem anterior restaurada.' }; }
+      catch (error) { return { restored: false, message: error.message || 'Não foi possível restaurar os blocos.' }; }
+    }
+    try {
+      await restore(order, signal);
+      return { selected: true, message: 'Blocos ordenados na página.', ...(touched ? { undo } : {}) };
+    } catch (error) {
+      return { selected: false, message: error.message || 'Não foi possível ordenar os blocos.', ...(touched ? { undo } : {}) };
+    }
+  }
+  function destroy() {
+    for (const entry of orderBindings) { entry.controller.abort(); entry.live = false; }
+    orderBindings.clear();
+  }
+
+  return { scan, isCurrent, apply, prepare, destroy };
 }

@@ -22,9 +22,9 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
         || typeof question.prompt !== 'string' || !question.prompt.trim() || question.prompt.length > 20000) {
       throw failure('INPUT', messages.INPUT);
     }
-    const options = (values, minimum = 2) => {
-      if (!Array.isArray(values) || values.length < minimum || values.length > 30
-          || Array.from(values).some(option => typeof option?.text !== 'string' || !option.text.trim() || option.text.length > 4000)) {
+    const options = (values, minimum = 2, maximum = 30, maxTextLength = 4000) => {
+      if (!Array.isArray(values) || values.length < minimum || values.length > maximum
+          || Array.from(values).some(option => typeof option?.text !== 'string' || !option.text.trim() || option.text.length > maxTextLength)) {
         throw failure('INPUT', messages.INPUT);
       }
       return values.map(option => ({ text: option.text }));
@@ -32,6 +32,7 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
     const kind = question.kind === undefined ? 'choice' : question.kind;
     let clean;
     if (kind === 'choice') clean = { prompt: question.prompt, multiple: question.multiple === true, options: options(question.options) };
+    else if (kind === 'order') clean = { prompt: question.prompt, kind, options: options(question.options, 2, 60, 1000) };
     else if (kind === 'blanks') {
       if (!Array.isArray(question.fields) || question.fields.length < 1 || question.fields.length > 20) throw failure('INPUT', messages.INPUT);
       clean = { prompt: question.prompt, kind, fields: Array.from(question.fields, field => {
@@ -53,8 +54,17 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
         || typeof answer.explanation !== 'string' || !answer.explanation.trim() || answer.explanation.length > 3000
         || !['high', 'medium', 'low'].includes(answer.confidence)) throw failure('FORMAT', messages.FORMAT);
     const details = { explanation: answer.explanation.trim(), confidence: answer.confidence };
+    if (question.kind === 'order') {
+      if (!Array.isArray(answer.order) || ('indices' in answer) || ('text' in answer) || ('selections' in answer)
+          || (answer.order.length !== 0 && answer.order.length !== question.options.length)
+          || new Set(answer.order).size !== answer.order.length
+          || answer.order.some(index => !Number.isInteger(index) || index < 0 || index >= question.options.length)) {
+        throw failure('FORMAT', messages.FORMAT);
+      }
+      return { order: [...answer.order], ...details };
+    }
     if (question.kind === 'blanks') {
-      if (!Array.isArray(answer.selections) || ('indices' in answer) || ('text' in answer)
+      if (!Array.isArray(answer.selections) || ('indices' in answer) || ('text' in answer) || ('order' in answer)
           || (answer.selections.length !== 0 && answer.selections.length !== question.fields.length)
           || answer.selections.some((index, field) => !Number.isInteger(index) || index < 0 || index >= question.fields[field]?.options.length)) {
         throw failure('FORMAT', messages.FORMAT);
@@ -62,7 +72,7 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
       return { selections: [...answer.selections], ...details };
     }
     if (question.kind === 'text') {
-      if (typeof answer.text !== 'string' || ('indices' in answer) || ('selections' in answer)) throw failure('FORMAT', messages.FORMAT);
+      if (typeof answer.text !== 'string' || ('indices' in answer) || ('selections' in answer) || ('order' in answer)) throw failure('FORMAT', messages.FORMAT);
       const text = answer.text.trim();
       if (text.length > question.maxLength || (text.length > 0 && text.length < question.minLength)) throw failure('FORMAT', messages.FORMAT);
       return { text, ...details };

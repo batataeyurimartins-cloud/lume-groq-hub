@@ -208,10 +208,11 @@ test('automatic mode marks low-confidence answers without an extra manual action
   } finally { await page.close(); }
 });
 
-test('text and blanks route their response payload, count once, and retain undo', async () => {
+test('text, blanks and word ordering route their response payload, count once, and retain undo', async () => {
   for(const [kind,response,payload] of [
     ['text',{text:'A distância mede todo o caminho; o deslocamento liga as posições inicial e final.',confidence:'high'},'A distância mede todo o caminho; o deslocamento liga as posições inicial e final.'],
     ['blanks',{selections:[2,0,1],confidence:'high'},[2,0,1]],
+    ['order',{order:[2,0,1],confidence:'high'},[2,0,1]],
   ]) {
     const page=await setup({questionKind:kind,response});
     try {
@@ -219,7 +220,7 @@ test('text and blanks route their response payload, count once, and retain undo'
       await page.waitForFunction(()=>window.uiTest.confirmedIds.length===1);
       await page.getByText('Respostas: 1',{exact:true}).first().waitFor();
       assert.deepEqual(await metric(page,'appliedPayloads'),[payload]);
-      assert.ok((await metric(page,'toastEvents')).some(text=>text.includes('Preenchendo respostas')));
+      assert.ok((await metric(page,'toastEvents')).some(text=>text.includes(kind==='order'?'Ordenando palavras':'Preenchendo respostas')));
       await page.evaluate(()=>document.querySelector('main').append(document.createElement('p')));
       await page.waitForTimeout(400);
       assert.equal(await metric(page,'solves'),1);
@@ -246,8 +247,8 @@ test('pausing during lazy-menu preparation cancels reading before any AI query o
   } finally {await page.close();}
 });
 
-test('empty text and blank responses abstain without incrementing the counter, with a text explanation',async()=>{
-  for(const [kind,response] of [['text',{text:'',confidence:'low',explanation:'Faltam informações no enunciado para escrever esta resposta.'}],['blanks',{selections:[],confidence:'low'}]]) {
+test('empty text, blank and ordering responses abstain without incrementing the counter, with a text explanation',async()=>{
+  for(const [kind,response] of [['text',{text:'',confidence:'low',explanation:'Faltam informações no enunciado para escrever esta resposta.'}],['blanks',{selections:[],confidence:'low'}],['order',{order:[],confidence:'low'}]]) {
     const page=await setup({questionKind:kind,response});
     try {
       await start(page);

@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const {readFileSync}=require('node:fs');
 const path=require('node:path');
 const {chromium}=require('playwright');
+const {salaOrderActivity}=require('./fixtures/sala-order.cjs');
 const root=path.join(__dirname,'..');
 const publicOrigin='https://lume-public.test';
 const activityUrl='https://saladofuturo.educacao.sp.gov.br/lume-bookmarklet-test';
@@ -93,6 +94,8 @@ function mixedSalaActivity({choice=true,blanks=true,text=true}={}) {
     })();
   </script></body></html>`;
 }
+
+
 let browser;
 before(async()=>{browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});});
 after(async()=>{await browser?.close();});
@@ -289,6 +292,53 @@ test('bookmarklet fills and undoes a Sala form with hidden honeypot and no maxim
     assert.equal(fixture.requests.length,1);
     assert.equal(fixture.requests[0].payload.question.kind,'text');
     assert.equal(fixture.requests[0].payload.question.maxLength,3000);
+    assert.match(await activity.locator('#lume-groq-hub').locator('.status-text').textContent(),/pausado/i);
+  } finally {await fixture.context.close();}
+});
+
+test('bookmarklet orders real Sala CLOUD Boxes including repeated words once, then restores the empty answer',async()=>{
+  const order=[1,5,6,4,2,3,7,0];
+  const originalWords=['vida','a','luz','sustentam','a','água','e','a'];
+  let beforeAnswer;
+  let fixture;
+  fixture=await setup({activityHtml:salaOrderActivity(),answerFor:async()=>{
+    beforeAnswer=await fixture.activity.evaluate(()=>structuredClone(window.__cloudFixture));
+    return {order,explanation:'EXPLICACAO_NAO_INSERIR_NA_FRASE',confidence:'high'};
+  }});
+  const {activity,requests}=fixture;
+  try {
+    assert.equal(await activity.locator('#cloud-order-card [role]').count(),0,'The actual CLOUD widget has no invented accessibility roles for its word bank');
+    assert.equal(await activity.locator('.MuiChip-root').count(),0,'The actual word controls are plain MuiBox divs');
+    await fixture.invoke();
+    await activity.waitForFunction(expected=>JSON.stringify(window.__cloudFixture.selected)===JSON.stringify(expected)&&document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.toasts').textContent.includes('Respostas: 1'),order);
+    await activity.waitForFunction(()=>document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.status-text').textContent.includes('Concluído'));
+    assert.equal(requests.length,1);
+    assert.deepEqual(beforeAnswer.selected,[],'Reading the word bank must preserve the initial answer');
+    assert.deepEqual(beforeAnswer.bankClicks,[]);
+    const question=requests[0].payload.question;
+    assert.equal(question.kind,'order');
+    assert.match(question.prompt,/Organize as palavras.*importância da água e da luz/);
+    assert.ok(!question.prompt.includes('Lixeira'),'SVG titles and answer controls must not become part of the question');
+    assert.deepEqual(question.options.map(option=>option.text),originalWords,'Equal word text at different bank positions must retain distinct indices');
+    const selectedText=await activity.locator('#cloud-order-card .css-1ydeh3u button').evaluateAll(buttons=>buttons.filter(button=>!button.querySelector('svg')).map(button=>button.textContent.trim()));
+    assert.equal(selectedText.join(' '),'a água e a luz sustentam a vida');
+    assert.deepEqual(await activity.evaluate(()=>window.__cloudFixture.bankClicks),order,'Every original word position must be clicked once');
+    const bank=activity.locator('#cloud-order-card .MuiGrid-container > .MuiGrid-item').nth(1).locator(':scope > .MuiBox-root');
+    assert.equal(await bank.count(),8,'Used word nodes must remain in the bank DOM');
+    assert.equal(await bank.evaluateAll(elements=>elements.every(element=>getComputedStyle(element).display==='none')),true);
+    await activity.waitForTimeout(850);
+    await fixture.invoke();
+    assert.equal(requests.length,1,'Changed selected chips and hidden bank words must not create another solve');
+    assert.equal(fixture.bundleCount(),1);
+    assert.equal(fixture.directCount(),0);
+    assert.equal(requests[0].authorization,undefined);
+    assert.equal(activity.url(),activityUrl);
+    await activity.locator('#lume-groq-hub').locator('.undo').click();
+    await activity.waitForFunction(()=>window.__cloudFixture.selected.length===0&&document.querySelector('#lume-groq-hub')?.shadowRoot.querySelector('.toasts').textContent.includes('Respostas: 0'));
+    assert.deepEqual(await activity.evaluate(()=>window.__cloudFixture.selected),[]);
+    assert.equal(await activity.locator('#cloud-order-card .css-1ydeh3u button').count(),0);
+    assert.equal(await bank.evaluateAll(elements=>elements.every(element=>getComputedStyle(element).display!=='none')),true,'Undo must restore the entire bank without navigating or submitting');
+    assert.equal(requests.length,1);
     assert.match(await activity.locator('#lume-groq-hub').locator('.status-text').textContent(),/pausado/i);
   } finally {await fixture.context.close();}
 });
