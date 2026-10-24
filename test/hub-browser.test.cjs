@@ -246,12 +246,13 @@ test('pausing during lazy-menu preparation cancels reading before any AI query o
   } finally {await page.close();}
 });
 
-test('empty text and blank responses abstain without incrementing the counter',async()=>{
-  for(const [kind,response] of [['text',{text:'',confidence:'low'}],['blanks',{selections:[],confidence:'low'}]]) {
+test('empty text and blank responses abstain without incrementing the counter, with a text explanation',async()=>{
+  for(const [kind,response] of [['text',{text:'',confidence:'low',explanation:'Faltam informações no enunciado para escrever esta resposta.'}],['blanks',{selections:[],confidence:'low'}]]) {
     const page=await setup({questionKind:kind,response});
     try {
       await start(page);
       await page.getByText('Sem resposta suficiente. Questão ignorada.',{exact:true}).waitFor();
+      if(kind==='text') await page.getByText(response.explanation,{exact:true}).waitFor();
       assert.equal(await metric(page,'applies'),0);
       assert.equal(await metric(page,'solves'),1);
       await page.getByText('Concluído · aguardando próxima questão',{exact:true}).waitFor();

@@ -1,4 +1,4 @@
-/* Lume · Hub Groq v3.2.0 | Hub compacto com respostas e preenchimento automático. */
+/* Lume · Hub Groq v3.2.1 | Hub compacto com respostas e preenchimento automático. */
 (() => {
 'use strict';
 
@@ -21,7 +21,7 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
   function visible(element) {
     if (!element || !element.isConnected || isExcluded(element)) return false;
     for (let item = element; item && item.nodeType === 1; item = item.parentElement) {
-      if (item.hidden || item.getAttribute('aria-hidden') === 'true') return false;
+      if (item.hasAttribute('hidden') || item.getAttribute('aria-hidden') === 'true') return false;
       const style = view?.getComputedStyle(item);
       if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse')) return false;
     }
@@ -328,7 +328,7 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
     for (let item = element; item && item !== root?.parentElement; item = item.parentElement) {
       const hiddenByOwnMenu = menuSession && item.contains(menuSession.field.element) &&
         !menuSession.hiddenBefore.has(item);
-      if (item.hidden || (item.getAttribute('aria-hidden') === 'true' && !hiddenByOwnMenu)) return false;
+      if (item.hasAttribute('hidden') || (item.getAttribute('aria-hidden') === 'true' && !hiddenByOwnMenu)) return false;
       const style = view.getComputedStyle(item);
       if (style.display === 'none' || /^(hidden|collapse)$/.test(style.visibility)) return false;
     }
@@ -409,19 +409,37 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
     return prompt;
   }
   function limitsFor(element, root) {
-    // Typography siblings have no separating text node: textContent would turn
-    // a maximum of 160 followed by "0 caractere" into the number 1600.
-    const walker = doc.createTreeWalker(root, view.NodeFilter.SHOW_TEXT);
-    const pieces = [];
-    let node;
-    while ((node = walker.nextNode())) pieces.push(node.textContent);
-    const content = clean(pieces.join(' '));
-    const minMatch = content.match(/N[°ºo.]?\s*(?:mínimo|minimo)\s+de\s+caracteres\s*:\s*(\d+)/i);
-    const maxMatch = content.match(/N[°ºo.]?\s*(?:máximo|maximo)\s+de\s+caracteres\s*:\s*(\d+)/i);
+    // Sala renders the label even when its numeric limit is undefined. Read
+    // each label in isolation so its sibling counter cannot become the limit.
+    const blockSelector = '.MuiTypography-root,p,label,legend';
+    const blocks = Array.from(root.querySelectorAll(blockSelector));
+    if (root.matches(blockSelector)) blocks.unshift(root);
+    function labelLimit(word) {
+      const prefix = new RegExp(`N[°ºo.]?\\s*(?:${word})\\s+de\\s+caracteres\\s*:`, 'i');
+      const pattern = new RegExp(`${prefix.source}\\s*(\\d+)`, 'i');
+      for (const block of blocks) {
+        if (!prefix.test(clean(block.textContent))) continue;
+        // A broad Typography wrapper must not join separate label blocks.
+        if (Array.from(block.querySelectorAll(blockSelector)).some(child => prefix.test(clean(child.textContent)))) continue;
+        const match = clean(block.textContent).match(pattern);
+        if (match) return Number(match[1]);
+      }
+      // Plain HTML can put a complete label in a single text node. Combining
+      // unrelated text nodes here would recreate the missing-limit bug.
+      const walker = doc.createTreeWalker(root, view.NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        const match = clean(node.textContent).match(pattern);
+        if (match) return Number(match[1]);
+      }
+      return null;
+    }
+    const minLabel = labelLimit('mínimo|minimo');
+    const maxLabel = labelLimit('máximo|maximo');
     const attrMax = Number(element.getAttribute('maxlength'));
     const attrMin = Number(element.getAttribute('minlength'));
-    const minimum = minMatch ? Number(minMatch[1]) : element.hasAttribute('minlength') && attrMin >= 0 ? attrMin : 0;
-    const explicitMax = maxMatch ? Number(maxMatch[1]) : element.hasAttribute('maxlength') && attrMax > 0 ? attrMax : null;
+    const minimum = minLabel ?? (element.hasAttribute('minlength') && attrMin >= 0 ? attrMin : 0);
+    const explicitMax = maxLabel ?? (element.hasAttribute('maxlength') && attrMax > 0 ? attrMax : null);
     const maximum = explicitMax ?? Math.max(3000, minimum);
     const maxLength = Math.max(1, Math.min(8000, maximum));
     if (minimum > 8000 || minimum > maxLength) return { minLength: minimum, maxLength, invalid: true };
@@ -1057,7 +1075,7 @@ function createHostedClient({ endpoint, token, public: publicAccess = false, fet
 // hub.js
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.2.0';
+  const version = '3.2.1';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
@@ -1255,6 +1273,10 @@ function mountLumeHub() {
           if (kind === 'text' ? typeof payload !== 'string' || !payload.trim() : !Array.isArray(payload) || !payload.length) {
             state.handled.set(key, { status: 'skipped' });
             notify('Sem resposta suficiente. Questão ignorada.');
+            if (kind === 'text' && typeof answer.explanation === 'string' && answer.explanation.trim()) {
+              const reason = answer.explanation.trim();
+              notify(reason.length > 240 ? `${reason.slice(0, 237)}…` : reason);
+            }
             continue;
           }
           notify(answer.confidence === 'low' ? 'Resposta detectada · confiança baixa' : 'Resposta detectada');

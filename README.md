@@ -1,6 +1,6 @@
 # Lume · Favorito automático com Groq
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê as questões, marca alternativas e preenche lacunas e respostas de texto, com notificações em cada etapa. Versão **3.2.0**.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Lê as questões, marca alternativas e preenche lacunas e respostas de texto, com notificações em cada etapa. Versão **3.2.1**.
 
 ## Instalar o bookmarklet
 
@@ -50,6 +50,8 @@ O leitor atende controles HTML `radio`, `checkbox`, `select` e campos de texto r
 Os componentes SINGLE e MULTI da Sala do Futuro usam controles MUI com o texto da alternativa em um bloco separado. O leitor reconhece essas linhas e agrupa as caixas de seleção sem depender de um atributo `name`. Esse formato foi reproduzido em testes de navegador a partir dos componentes públicos da plataforma. Quando não reconhece alternativas, o painel informa a falha de leitura.
 
 Os componentes **FILL_WORDS**, **TEXT** e **TEXT_AI** da Sala também são reconhecidos. Os menus MUI são lidos somente quando abertos e o texto é preenchido com os eventos do campo nativo. Os testes reproduzem o banco de palavras compartilhado, os menus em portal e os limites de caracteres que a Sala mostra abaixo do campo.
+
+Nas discursivas, o formulário real inclui um campo invisível chamado `hidden`. O leitor verifica o atributo HTML de ocultação para não confundir esse campo com o formulário inteiro. Limites de caracteres são lidos por rótulo; um máximo não informado usa o padrão de 3.000 caracteres, sem capturar o contador vizinho. Quando a IA se abstém de escrever, a notificação mostra o motivo.
 
 Redações em editores próprios, ordenação, arrastar e soltar, canvas, Shadow DOM de outros componentes e frames de outro domínio podem exigir adaptadores específicos. Não há OCR: imagens, gráficos, áudio e vídeo não são enviados ao modelo.
 

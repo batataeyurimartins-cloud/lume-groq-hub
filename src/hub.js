@@ -1,6 +1,6 @@
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.2.0';
+  const version = '3.2.1';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
@@ -198,6 +198,10 @@ function mountLumeHub() {
           if (kind === 'text' ? typeof payload !== 'string' || !payload.trim() : !Array.isArray(payload) || !payload.length) {
             state.handled.set(key, { status: 'skipped' });
             notify('Sem resposta suficiente. Questão ignorada.');
+            if (kind === 'text' && typeof answer.explanation === 'string' && answer.explanation.trim()) {
+              const reason = answer.explanation.trim();
+              notify(reason.length > 240 ? `${reason.slice(0, 237)}…` : reason);
+            }
             continue;
           }
           notify(answer.confidence === 'low' ? 'Resposta detectada · confiança baixa' : 'Resposta detectada');

@@ -25,7 +25,7 @@ function mixedSalaActivity({choice=true,blanks=true,text=true}={}) {
   return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><style>.MuiPaper-elevation3{margin:20px;padding:16px;box-shadow:0 2px 5px #ccc}.MuiSelect-select{min-width:80px;min-height:20px;border:1px solid #888;padding:5px}.MuiMenu-root{position:fixed;inset:0;z-index:1300}.MuiBackdrop-root{position:fixed;inset:0}.MuiMenu-paper{position:relative;background:white;margin:50px;padding:12px;width:220px}.MuiMenuItem-root{padding:8px;cursor:pointer}</style></head><body><main>
     ${choice?`<div id="mixed-choice" class="MuiPaper-root MuiPaper-elevation MuiPaper-elevation3"><h6 class="MuiTypography-root">Questão 01</h6><div class="main"><p>Quanto é dois mais dois? Marque uma alternativa.</p></div><div class="MuiFormGroup-root" role="radiogroup">${['Dois','Quatro','Seis','Oito'].map(radioOption).join('')}</div></div>`:''}
     ${blanks?`<div id="mixed-blanks" class="MuiPaper-root MuiPaper-elevation MuiPaper-elevation3"><h6 class="MuiTypography-root">Questão 02</h6><div class="main"><p>Complete a frase sobre a fotossíntese com as palavras corretas.</p></div><div class="MuiPaper-root MuiPaper-elevation MuiPaper-elevation0"><span style="white-space:pre-wrap">As </span>${blank(0)}<span style="white-space:pre-wrap"> precisam de </span>${blank(1)}<span style="white-space:pre-wrap"> para realizar a fotossíntese.</span></div></div>`:''}
-    ${text?`<div id="mixed-text" class="MuiPaper-root MuiPaper-elevation MuiPaper-elevation3"><h6 class="MuiTypography-root">Questão 03</h6><div class="main"><p>Explique por que as plantas precisam de luz para a fotossíntese.</p></div><div class="MuiFormControl-root"><div class="MuiInputBase-root MuiInputBase-multiline"><textarea class="MuiInputBase-input MuiInputBase-inputMultiline" placeholder="Responder" rows="4"></textarea><textarea class="MuiInputBase-input MuiInputBase-inputMultiline" aria-hidden="true" tabindex="-1" style="visibility:hidden;position:absolute;height:0" readonly></textarea></div></div><p class="MuiTypography-root" id="text-minimum">N° mínimo de caracteres: 12</p><p class="MuiTypography-root" id="text-maximum" style="display:none">N° máximo de caracteres: 160</p><p class="MuiTypography-root" id="text-counter">0 caractere</p><div class="MuiBox-root">Assistente de correção</div></div>`:''}
+    ${text?`<div id="mixed-text" class="MuiPaper-root MuiPaper-elevation MuiPaper-elevation3"><h6 class="MuiTypography-root">Questão 03</h6><div class="main"><p>Explique por que as plantas precisam de luz para a fotossíntese.</p></div><form><input type="text" name="hidden" style="display:none"><div class="MuiFormControl-root"><div class="MuiInputBase-root MuiInputBase-multiline"><textarea class="MuiInputBase-input MuiInputBase-inputMultiline" placeholder="Responder" rows="4"></textarea><textarea class="MuiInputBase-input MuiInputBase-inputMultiline" aria-hidden="true" tabindex="-1" style="visibility:hidden;position:absolute;height:0" readonly></textarea></div></div></form><p class="MuiTypography-root" id="text-minimum">N° mínimo de caracteres: 12</p><p class="MuiTypography-root" id="text-maximum" style="display:none">N° máximo de caracteres: 160</p><p class="MuiTypography-root" id="text-counter">0 caractere</p><div class="MuiBox-root">Assistente de correção</div></div>`:''}
   </main><script>
     (() => {
       const words=['plantas','luz','rochas','fungos'];
@@ -274,9 +274,9 @@ test('bookmarklet answers choice, lazy Sala blanks, and a bounded textarea once 
   } finally {await fixture.context.close();}
 });
 
-test('bookmarklet undo restores a Sala textarea through its input event and reduces the response count',async()=>{
+test('bookmarklet fills and undoes a Sala form with hidden honeypot and no maximum limit',async()=>{
   const responseText='A luz fornece a energia necessária para a fotossíntese.';
-  const fixture=await setup({activityHtml:mixedSalaActivity({choice:false,blanks:false}),answerFor:()=>({text:responseText,explanation:'Isto não pertence ao campo.',confidence:'high'})});
+  const fixture=await setup({activityHtml:mixedSalaActivity({choice:false,blanks:false}).replace('N° máximo de caracteres: 160','N° máximo de caracteres: '),answerFor:()=>({text:responseText,explanation:'Isto não pertence ao campo.',confidence:'high'})});
   const {activity}=fixture;
   try {
     await fixture.invoke();
@@ -288,6 +288,7 @@ test('bookmarklet undo restores a Sala textarea through its input event and redu
     assert.ok(await activity.evaluate(()=>window.__salaFixture.inputEvents>=2),'Fill and undo must both update the controlled form');
     assert.equal(fixture.requests.length,1);
     assert.equal(fixture.requests[0].payload.question.kind,'text');
+    assert.equal(fixture.requests[0].payload.question.maxLength,3000);
     assert.match(await activity.locator('#lume-groq-hub').locator('.status-text').textContent(),/pausado/i);
   } finally {await fixture.context.close();}
 });
