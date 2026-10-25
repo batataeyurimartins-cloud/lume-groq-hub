@@ -490,6 +490,76 @@ test('text-only output budgets fit the answer kind and preserve room for reasoni
   }
 });
 
+test('text answers use a strict three-field schema on supported models without changing other direct models', async () => {
+  const current = { kind: 'text', prompt: 'Explique distância e deslocamento.', minLength: 1, maxLength: 3000 };
+  const result = { text: 'Distância mede o caminho percorrido; deslocamento liga a posição inicial à final.', ...details };
+  for (const model of ['openai/gpt-oss-120b', 'openai/gpt-oss-20b']) {
+    let sent;
+    const client = createGroqClient({ fetchImpl: async (_, options) => { sent = JSON.parse(options.body); return ok(result); } });
+    assert.deepEqual(await client.solve(input({ model, question: current })), result);
+    assert.deepEqual(sent.response_format, {
+      type: 'json_schema', json_schema: {
+        name: 'lume_text_answer', strict: true,
+        schema: {
+          type: 'object',
+          properties: {
+            text: { type: 'string' }, explanation: { type: 'string' },
+            confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+          },
+          required: ['text', 'explanation', 'confidence'], additionalProperties: false,
+        },
+      },
+    });
+    assert.equal(sent.messages[0].content.includes('minLength e maxLength'), true);
+  }
+  let legacy;
+  const client = createGroqClient({ fetchImpl: async (_, options) => { legacy = JSON.parse(options.body); return ok(result); } });
+  await client.solve(input({ model: 'another/direct-model', question: current }));
+  assert.deepEqual(legacy.response_format, { type: 'json_object' });
+});
+
+test('text with images retains the strict schema and enough output budget for the text field', async () => {
+  const current = { kind: 'text', prompt: 'Descreva o gráfico.', minLength: 5, maxLength: 8000 };
+  const result = { text: 'A curva cresce com o tempo.', ...details };
+  for (const count of [1, 3]) {
+    let sent;
+    const client = createGroqClient({ fetchImpl: async (_, options) => { sent = JSON.parse(options.body); return ok(result); } });
+    await client.solve(input({ question: { ...current, images: Array.from({ length: count }, (_, index) => ({ ...visionImage, label: `Gráfico ${index + 1}` })) } }));
+    assert.equal(sent.model, visionModel);
+    assert.equal(sent.response_format.type, 'json_schema');
+    assert.equal(sent.response_format.json_schema.strict, true);
+    assert.equal(sent.max_tokens, 3000, 'A text answer must not inherit the short choice-only vision budget');
+    assert.equal(sent.reasoning_effort, 'none');
+    assert.equal(sent.messages[1].content.filter(part => part.type === 'image_url').length, count);
+  }
+});
+
+test('text format failures carry only bounded diagnostic categories and still reject unusable answers', async () => {
+  const current = { kind: 'text', prompt: 'Explique.', minLength: 5, maxLength: 20 };
+  const valid = { text: 'Texto válido.', ...details };
+  const cases = [
+    [() => ok({ ...valid, explanation: '' }), 'METADATA'],
+    [() => ok({ ...valid, indices: [] }), 'TEXT_SHAPE'],
+    [() => ok({ ...valid, text: 12 }), 'TEXT_SHAPE'],
+    [() => ok({ ...valid, text: 'abc' }), 'TEXT_LENGTH'],
+    [() => ok({ ...valid, text: 'x'.repeat(21) }), 'TEXT_LENGTH'],
+    [() => ok(valid, 'length'), 'TRUNCATED'],
+    [() => Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{ private-provider-data' } }] }), 'INVALID_JSON'],
+    [() => Response.json({ choices: [] }), 'ENVELOPE'],
+    [() => ok('private-provider-data'), 'ENVELOPE'],
+    [() => new Response('private-provider-data'), 'ENVELOPE'],
+  ];
+  for (const [response, reason] of cases) {
+    let calls = 0;
+    const client = createGroqClient({ fetchImpl: async () => { calls++; return response(); } });
+    await assert.rejects(client.solve(input({ question: current })), error => error.code === 'FORMAT'
+      && error.formatReason === reason && !error.message.includes('private-provider-data'));
+    assert.equal(calls, 1, 'Invalid text never triggers another provider query automatically');
+  }
+  const abstaining = createGroqClient({ fetchImpl: async () => ok({ text: '', ...details }) });
+  assert.equal((await abstaining.solve(input({ question: current }))).text, '');
+});
+
 test('text-only prompts include only the active answer contract while retaining safety and semantic instructions', async () => {
   const contracts = ['indices', 'selections', 'text', 'orderedBlocks'];
   for (const [current, result, field] of [

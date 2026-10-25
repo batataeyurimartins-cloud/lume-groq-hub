@@ -56,7 +56,7 @@ async function setup({ retryAfter = 75, publicAccess = true } = {}) {
       },
     };
     window.createHostedClient = options => {
-      window.quotaTest.configuredIntervals = [options.minIntervalMs, options.visionIntervalMs];
+      window.quotaTest.configuredIntervals = [options.minIntervalMs ?? 0, options.visionIntervalMs ?? 0];
       return client;
     };
     window.createGroqClient = () => client;
@@ -80,7 +80,7 @@ test('Retry-After blocks restart, settings, navigation and close/reopen; expiry 
   const page = await setup({ retryAfter: 75 });
   try {
     assert.equal(await page.getByRole('button', { name: 'Aguarde 75 s', exact: true }).isDisabled(), true);
-    assert.deepEqual(await page.evaluate(() => window.quotaTest.configuredIntervals), [6000, 20000]);
+    assert.deepEqual(await page.evaluate(() => window.quotaTest.configuredIntervals), [0, 0]);
     // Even a programmatic click cannot bypass the cooldown guard.
     await page.evaluate(() => document.querySelector('#lume-groq-hub').shadowRoot.querySelector('.toggle').dispatchEvent(new MouseEvent('click')));
     await page.getByRole('button', { name: 'Ajustes', exact: true }).click();

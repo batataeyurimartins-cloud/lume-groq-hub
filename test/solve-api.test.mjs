@@ -822,3 +822,17 @@ test('provider cooldown uses a sixty-second fallback when the provider omits its
   assert.equal((await invoke({handler})).res.statusCode,200);
   assert.equal(calls,2);
 });
+
+test('format diagnostics expose only fixed reason codes without provider data',async()=>{
+  for(const reason of ['TRUNCATED','TEXT_LENGTH','TEXT_SHAPE','METADATA','INVALID_JSON','ENVELOPE','private-provider-content',null]) {
+    const handler=createSolveHandler({env,client:{solve:async()=>{
+      throw Object.assign(new Error('private-provider-content'),{code:'FORMAT',formatReason:reason});
+    }}});
+    const {res}=await invoke({handler,body:{question:{kind:'text',prompt:'Explique o deslocamento.',minLength:1,maxLength:3000}}});
+    assert.equal(res.statusCode,502);
+    assert.equal(res.body.error.code,'FORMAT');
+    assert.equal(res.body.error.reason,typeof reason==='string'&&reason!=='private-provider-content'?reason:undefined);
+    assert.ok(!res.text.includes('private-provider-content'));
+    assert.ok(!res.text.includes(env.GROQ_API_KEY));
+  }
+});

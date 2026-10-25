@@ -1,6 +1,6 @@
 # Lume · BatataHub
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos, monta frases com blocos de palavras e lê imagens das questões, com notificações em cada etapa. Versão **3.8.0**. O painel usa tons de verde grafite e lima, com ícones próprios, estados visuais de execução e conclusão e animações que respeitam a preferência por movimento reduzido.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos, monta frases com blocos de palavras e lê imagens das questões, com notificações em cada etapa. Versão **3.8.1**. O painel usa tons de verde grafite e lima, com ícones próprios, estados visuais de execução e conclusão e animações que respeitam a preferência por movimento reduzido.
 
 ## Instalar o bookmarklet
 
@@ -17,7 +17,7 @@ Após uma atualização, feche o hub no **×** e clique no mesmo favorito para c
 ## Uso
 
 - **Responder tarefa** inicia somente a atividade aberta. Uma notificação no centro superior mostra o nome da tarefa.
-- O favorito público espaça o início das consultas: pelo menos 6 segundos para texto e 20 segundos por imagem, até 60 segundos. A espera aparece no painel e pode ser cancelada ao pausar. Uma consulta demorada já conta para esse intervalo.
+- A próxima questão é consultada assim que o preenchimento anterior é confirmado, sem pausas fixas entre questões. O cache e o bloqueio após um limite da API continuam ativos.
 - Ao atingir um limite, o botão mostra **Aguarde N s** e respeita a espera informada pela API; sem uma espera válida, usa 60 segundos. Trocar de atividade ou fechar e reabrir o hub na mesma aba conserva esse prazo em memória. Ao liberar, aguarda seu clique para continuar.
 - **Pausar tarefa** interrompe a consulta em andamento. Retomar a mesma tarefa preserva a contagem e as questões já preenchidas.
 - Ao preencher todas as questões, o botão muda para **Tarefa concluída** e fica desativado. Abrir outra atividade zera o contador e aguarda um novo clique; consultas pendentes da tarefa anterior são canceladas.
@@ -25,7 +25,7 @@ Após uma atualização, feche o hub no **×** e clique no mesmo favorito para c
 - Quando a Sala mostra um texto-base em cartões INFO ou SECTION anteriores à questão, o leitor inclui o material visível mais próximo no enunciado e também prepara suas imagens. Uma nova seção delimita esse contexto; perguntas e respostas de outros cartões não são copiadas. Alterações no texto-base invalidam uma resposta pendente.
 - Se a IA não puder responder, o aviso mostra a justificativa também nas questões de alternativas, sem contar uma resposta preenchida.
 - Nas lacunas, o hub abre os menus para ler as opções, fecha-os e consulta o serviço de IA uma vez para o conjunto. Depois preenche cada campo, mesmo quando a Sala remove as palavras escolhidas dos outros menus. O contador aumenta uma vez pela questão completa.
-- Nas questões de texto, preenche o campo **Responder** respeitando os limites de caracteres. As notificações mostram **Questão de texto detectada** e **Preenchendo respostas…**.
+- Nas questões de texto, exige uma resposta JSON com formato estrito e preenche o campo **Responder** respeitando os limites de caracteres. As notificações mostram **Questão de texto detectada** e **Preenchendo respostas…**.
 - Nos blocos de palavras **CLOUD**, lê o banco completo e clica nos blocos na ordem da frase. Palavras repetidas são preservadas como blocos diferentes. O serviço de IA monta a sequência com os textos dos blocos; o cliente os converte para os índices originais, sem uma segunda consulta. Esse cuidado reduz erros de posição, mas não garante uma resposta correta. Mostra **Ordenando palavras…** e conta uma resposta após confirmar toda a sequência. **Desfazer** restaura a seleção anterior, inclusive uma frase parcialmente montada.
 - Nas questões com imagens, mostra **Lendo imagens…** e **Analisando imagens…**. Envia até três imagens do enunciado e das alternativas junto com o texto; usa automaticamente o modelo de visão. Alternativas compostas apenas por imagens também recebem identificação própria. Imagem indisponível, formato não suportado ou excesso de imagens interrompe a consulta com um aviso.
 - **Desfazer** pausa a tarefa e restaura a última seleção quando a questão e a seleção continuam iguais.

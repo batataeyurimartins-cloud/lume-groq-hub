@@ -300,3 +300,14 @@ test('concurrent distinct queries reserve separate starts instead of waking into
   assert.ok(starts[1]-starts[0]>=35);
   assert.ok(starts[2]-starts[1]>=35);
 });
+
+test('text format diagnostics distinguish interrupted output and character limits without trusting server prose',async()=>{
+  for(const [reason,pattern] of [['TRUNCATED',/interrompida/],['TEXT_LENGTH',/limite de caracteres/],['TEXT_SHAPE',/formato solicitado/],['METADATA',/incompleta/],['INVALID_JSON',/ilegível/],['ENVELOPE',/completa/],['private-provider-content',/servidor não retornou/]]) {
+    let calls=0;
+    const client=createHostedClient({endpoint,public:true,fetchImpl:async()=>{
+      calls++;return Response.json({error:{code:'FORMAT',reason,message:'private-provider-content'}},{status:502});
+    }});
+    await assert.rejects(client.solve({question:{kind:'text',prompt:'Explique o deslocamento.'}}),error=>error.code==='FORMAT'&&pattern.test(error.message)&&!error.message.includes('private-provider-content'));
+    assert.equal(calls,1);
+  }
+});

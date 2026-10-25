@@ -1,6 +1,6 @@
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.8.0';
+  const version = '3.8.1';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
@@ -58,13 +58,7 @@ function mountLumeHub() {
   (document.body || document.documentElement).append(host);
   const $ = selector => shadow.querySelector(selector);
   const adapter = createPageAdapter({ document, exclude: host });
-  const client = hostedConfig ? createHostedClient({
-    ...hostedConfig, minIntervalMs: 6000, visionIntervalMs: 20000,
-    onWait: seconds => {
-      if (state.closed || !state.active) return;
-      status(seconds > 0 ? `Aguardando próxima consulta · ${seconds} s` : 'Analisando questão…');
-    },
-  }) : createGroqClient();
+  const client = hostedConfig ? createHostedClient(hostedConfig) : createGroqClient();
   const events = new AbortController();
   const toastTimers = new Map();
   // Only deadlines live in this tab's shared memory: never keys or question text.

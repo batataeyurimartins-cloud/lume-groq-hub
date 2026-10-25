@@ -13,6 +13,7 @@ const BATATAHUB_ORIGIN = 'https://batata-hub.vercel.app';
 const CORS_HEADERS = ['Authorization', 'Content-Type', 'Request-Id', 'Request-Context', 'Traceparent', 'Tracestate', 'Baggage'];
 const CORS_HEADER_NAMES = new Set(CORS_HEADERS.map(name => name.toLowerCase()));
 const LOCAL_ERROR = Symbol('localApiError');
+const FORMAT_REASONS = new Set(['METADATA', 'TEXT_SHAPE', 'TEXT_LENGTH', 'TRUNCATED', 'INVALID_JSON', 'ENVELOPE']);
 
 function header(req, name) {
   const value = req.headers?.[name.toLowerCase()];
@@ -281,7 +282,8 @@ function publicFailure(error) {
   const retryAfter = error?.code === 'RATE_LIMIT'
     ? (Number.isFinite(error.retryAfter) && error.retryAfter > 0 ? Math.min(86400, Math.ceil(error.retryAfter)) : 60)
     : undefined;
-  return { status, code: known[error?.code] ? error.code : 'API', message, retryAfter };
+  const formatReason = error?.code === 'FORMAT' && FORMAT_REASONS.has(error.formatReason) ? error.formatReason : undefined;
+  return { status, code: known[error?.code] ? error.code : 'API', message, retryAfter, formatReason };
 }
 
 export function createSolveHandler({ env = process.env, client = createGroqClient(), now = Date.now } = {}) {
@@ -399,7 +401,7 @@ export function createSolveHandler({ env = process.env, client = createGroqClien
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.end(JSON.stringify(body));
     };
-    const reject = (status, code, message) => send(status, { error: { code, message } });
+    const reject = (status, code, message, reason) => send(status, { error: { code, message, ...(reason ? { reason } : {}) } });
     const origin = header(req, 'origin');
     const allowed = origin && originValue(origin) === origin && allowedOrigins(env).has(origin);
     if ((origin && !allowed) || (req.headers?.origin && typeof req.headers.origin !== 'string')) {
@@ -454,7 +456,7 @@ export function createSolveHandler({ env = process.env, client = createGroqClien
     } catch (error) {
       const safe = publicFailure(error);
       if (safe.retryAfter) res.setHeader('Retry-After', String(safe.retryAfter));
-      return reject(safe.status, safe.code, safe.message);
+      return reject(safe.status, safe.code, safe.message, safe.formatReason);
     } finally {
       req.removeListener?.('aborted', onAborted);
       res.removeListener?.('close', onClosed);

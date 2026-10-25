@@ -42,6 +42,14 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
     TIMEOUT: 'A consulta demorou demais. Tente iniciar novamente.',
     ORIGIN: 'Este site não está autorizado a usar o hub hospedado.',
   };
+  const textFormatMessages = {
+    TRUNCATED: 'A resposta de texto foi interrompida pela IA antes de terminar. Tente novamente.',
+    TEXT_LENGTH: 'A IA não respeitou o limite de caracteres desta questão. Nada foi preenchido.',
+    TEXT_SHAPE: 'A IA não devolveu o texto no formato solicitado. Nada foi preenchido.',
+    METADATA: 'A resposta de texto veio incompleta. Nada foi preenchido.',
+    INVALID_JSON: 'A IA devolveu uma resposta de texto ilegível. Tente novamente.',
+    ENVELOPE: 'A IA não devolveu uma resposta de texto completa. Tente novamente.',
+  };
   function cleanQuestion(question) {
     if (!question || typeof question !== 'object' || Array.isArray(question)
         || typeof question.prompt !== 'string' || !question.prompt.trim() || question.prompt.length > 20000) {
@@ -135,6 +143,9 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
       if (controller.signal.aborted) throw failure('ABORTED', 'Consulta cancelada.');
       if (!response.ok) {
         const code = answer?.error?.code;
+        if (code === 'FORMAT' && clean.kind === 'text' && Object.hasOwn(textFormatMessages, answer?.error?.reason)) {
+          throw failure('FORMAT', textFormatMessages[answer.error.reason]);
+        }
         if (response.status === 429 && code === 'RATE_LIMIT') {
           const rawDelay = response.headers?.get?.('retry-after') || '';
           const seconds = /^\d+$/.test(rawDelay) ? Number(rawDelay) : NaN;
