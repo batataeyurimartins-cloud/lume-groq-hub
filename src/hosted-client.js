@@ -97,13 +97,26 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+    // Sala can wrap fetch, and a response body may still be pending after its
+    // request resolves. Race both stages so pause and timeout always release
+    // the hub, even when the transport does not honor the native signal.
+    function interruptible(operation) {
+      return new Promise((resolve, reject) => {
+        const onAbort = () => reject(failure('ABORTED', 'Consulta cancelada.'));
+        if (controller.signal.aborted) onAbort();
+        else controller.signal.addEventListener('abort', onAbort, { once: true });
+        Promise.resolve(operation).then(resolve, reject).finally(() => {
+          controller.signal.removeEventListener('abort', onAbort);
+        });
+      });
+    }
     try {
-      const response = await fetchImpl(url.href, {
+      const response = await interruptible(fetchImpl(url.href, {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...(!publicAccess ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(data), signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer', redirect: 'error',
-      });
+      }));
       let answer;
-      try { answer = await response.json(); } catch { throw failure('FORMAT', messages.FORMAT); }
+      try { answer = await interruptible(response.json()); } catch { throw failure('FORMAT', messages.FORMAT); }
       if (controller.signal.aborted) throw failure('ABORTED', 'Consulta cancelada.');
       if (!response.ok) {
         const code = answer?.error?.code;

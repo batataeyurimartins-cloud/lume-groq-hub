@@ -38,6 +38,36 @@ test('pause aborts the native request and pre-aborted work never uses fetch', as
   await assert.rejects(client.solve({question,signal:controller.signal}),error=>error.code==='ABORTED');
   assert.equal(calls,1);
 });
+
+for (const phase of ['fetch', 'response body']) {
+  test(`hosted timeout interrupts a stalled ${phase} even when transport ignores abort`, { timeout: 500 }, async () => {
+    let transportSignal;
+    const never = () => new Promise(() => {});
+    const client = createHostedClient({ endpoint, public: true, timeoutMs: 10, fetchImpl: (_, options) => {
+      transportSignal = options.signal;
+      return phase === 'fetch' ? never() : Promise.resolve({ ok: true, json: never });
+    } });
+    await assert.rejects(client.solve({ question }), error => error.code === 'TIMEOUT');
+    assert.equal(transportSignal.aborted, true);
+  });
+
+  test(`pause interrupts a stalled ${phase} even when transport ignores abort`, { timeout: 500 }, async () => {
+    const controller = new AbortController();
+    let notifyStarted, transportSignal;
+    const started = new Promise(resolve => { notifyStarted = resolve; });
+    const stalled = () => { notifyStarted(); return new Promise(() => {}); };
+    const client = createHostedClient({ endpoint, public: true, timeoutMs: 50, fetchImpl: (_, options) => {
+      transportSignal = options.signal;
+      return phase === 'fetch' ? stalled() : Promise.resolve({ ok: true, json: stalled });
+    } });
+    const pending = client.solve({ question, signal: controller.signal });
+    await started;
+    controller.abort();
+    await assert.rejects(pending, error => error.code === 'ABORTED');
+    assert.equal(transportSignal.aborted, true);
+  });
+}
+
 test('transport refuses insecure or redirect-capable endpoint configuration', () => {
   for (const value of ['http://lume-test/api/solve','https://lume-test/other','https://lume-test/api/solve?target=x','https://lume-test/api/lume/solve?target=x','https://lume-test/api/lume/solve#fragment','https://user:password@lume-test/api/lume/solve','https://lume-test/api/lume/other']) assert.throws(()=>createHostedClient({endpoint:value,token}));
 });

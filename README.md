@@ -17,7 +17,7 @@ Após uma atualização, feche o hub no **×** e clique no mesmo favorito para c
 ## Uso
 
 - **Responder tarefa** inicia somente a atividade aberta. Uma notificação no centro superior mostra o nome da tarefa.
-- **Pausar tarefa** interrompe a consulta em andamento. Retomar a mesma tarefa preserva a contagem e as questões já preenchidas.
+- **Pausar tarefa** interrompe a consulta em andamento, inclusive quando a página instrumenta a conexão ou a leitura da resposta fica pendente. O tempo limite também libera o painel nesses casos. Retomar a mesma tarefa preserva a contagem e as questões já preenchidas.
 - Ao preencher todas as questões, o botão muda para **Tarefa concluída** e fica desativado. Abrir outra atividade zera o contador e aguarda um novo clique; consultas pendentes da tarefa anterior são canceladas.
 - As notificações mostram **Questão detectada**, **Buscando resposta…**, **Resposta detectada**, **Marcando respostas…** e **Respostas: 1**, **Respostas: 2**, etc. O contador pertence à tarefa atual e aumenta somente após confirmar o preenchimento da questão. Isso não indica correção ou nota.
 - Nas lacunas, o hub abre os menus para ler as opções, fecha-os e consulta o serviço de IA uma vez para o conjunto. Depois preenche cada campo, mesmo quando a Sala remove as palavras escolhidas dos outros menus. O contador aumenta uma vez pela questão completa.
@@ -51,6 +51,8 @@ Se `PUBLIC_HUB` não for `true`, o endpoint mantém o modo privado e exige `HUB_
 O leitor atende controles HTML `radio`, `checkbox`, `select` e campos de texto reconhecidos, além dos controles acessíveis correspondentes. Antes de preencher, verifica se o enunciado, os campos e as opções ainda correspondem à questão consultada. Depois, confere se o preenchimento realmente ocorreu.
 
 Os componentes SINGLE e MULTI da Sala do Futuro usam controles MUI com o texto da alternativa em um bloco separado. O leitor reconhece essas linhas e agrupa as caixas de seleção sem depender de um atributo `name`. Esse formato foi reproduzido em testes de navegador a partir dos componentes públicos da plataforma. Quando não reconhece alternativas, o painel informa a falha de leitura.
+
+Textos e imagens de apoio nos cartões INFO/SECTION da Sala são incluídos na questão correspondente. A leitura considera os cartões de apoio anteriores da seção e exclui outros campos de resposta e conteúdo oculto. Alterações nesse apoio invalidam uma resposta pendente antes do preenchimento. Caixas de seleção com nomes diferentes ou reutilizados ficam agrupadas pela lista local de cada questão.
 
 Os componentes **FILL_WORDS**, **TEXT** e **TEXT_AI** da Sala também são reconhecidos. Os menus MUI são lidos somente quando abertos e o texto é preenchido com os eventos do campo nativo. Os testes reproduzem o banco de palavras compartilhado, os menus em portal e os limites de caracteres que a Sala mostra abaixo do campo.
 
