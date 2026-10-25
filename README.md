@@ -1,6 +1,6 @@
 # Lume · BatataHub
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos, monta frases com blocos de palavras e lê imagens das questões, com notificações em cada etapa. Versão **3.7.1**. O painel usa tons de verde grafite e lima, com ícones próprios, estados visuais de execução e conclusão e animações que respeitam a preferência por movimento reduzido.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos, monta frases com blocos de palavras e lê imagens das questões, com notificações em cada etapa. Versão **3.8.0**. O painel usa tons de verde grafite e lima, com ícones próprios, estados visuais de execução e conclusão e animações que respeitam a preferência por movimento reduzido.
 
 ## Instalar o bookmarklet
 
@@ -17,6 +17,8 @@ Após uma atualização, feche o hub no **×** e clique no mesmo favorito para c
 ## Uso
 
 - **Responder tarefa** inicia somente a atividade aberta. Uma notificação no centro superior mostra o nome da tarefa.
+- O favorito público espaça o início das consultas: pelo menos 6 segundos para texto e 20 segundos por imagem, até 60 segundos. A espera aparece no painel e pode ser cancelada ao pausar. Uma consulta demorada já conta para esse intervalo.
+- Ao atingir um limite, o botão mostra **Aguarde N s** e respeita a espera informada pela API; sem uma espera válida, usa 60 segundos. Trocar de atividade ou fechar e reabrir o hub na mesma aba conserva esse prazo em memória. Ao liberar, aguarda seu clique para continuar.
 - **Pausar tarefa** interrompe a consulta em andamento. Retomar a mesma tarefa preserva a contagem e as questões já preenchidas.
 - Ao preencher todas as questões, o botão muda para **Tarefa concluída** e fica desativado. Abrir outra atividade zera o contador e aguarda um novo clique; consultas pendentes da tarefa anterior são canceladas.
 - As notificações mostram **Questão detectada**, **Buscando resposta…**, **Resposta detectada**, **Marcando respostas…** e **Respostas: 1**, **Respostas: 2**, etc. O contador pertence à tarefa atual e aumenta somente após confirmar o preenchimento da questão. Isso não indica correção ou nota.
@@ -40,9 +42,11 @@ Com **PUBLIC_HUB=true**, `/api/solve` aceita questões sem token. A origem da Sa
 
 O preflight também aceita os cabeçalhos de rastreamento adicionados pela instrumentação da Sala do Futuro (`Request-Id`, `Request-Context`, `Traceparent`, `Tracestate`, `Baggage`). O teste de CORS usa servidores locais reais e um `fetch` instrumentado; não intercepta a API no Playwright.
 
-Há limites de **20 consultas por IP/minuto** e **60 consultas totais/minuto por instância**. São controles em memória, com tamanho limitado, e não uma cota global distribuída. Pausar ou fechar o hub impede novas consultas automáticas.
+Há limites de **20 consultas por IP/minuto** e **60 consultas totais/minuto por instância**. São controles em memória, com tamanho limitado, e não uma cota global distribuída. Pausar ou fechar o hub impede novas consultas automáticas. A chave gratuita é compartilhada pelos visitantes públicos, portanto os limites reais de solicitações e tokens do provedor continuam valendo.
 
-A conta gratuita do serviço de IA pode ser usada com os modelos oferecidos, sujeita às cotas da organização no [Console do serviço de IA](https://console.groq.com/docs/rate-limits). Quando o serviço de IA retorna 429, o servidor preserva o tempo de espera de `Retry-After` e o painel pede para aguardar antes de iniciar novamente. Uma espera indicada acima de oito segundos não dispara uma nova tentativa antecipada. Imagens consomem mais tokens da cota gratuita: o serviço de IA documenta 2.048 tokens de entrada por imagem. O envio usa uma única consulta por questão, com até três imagens; dados de imagem não são repetidos no texto do pedido. O corpo da API é limitado a 3 MB com imagens e 48 KB sem imagens; o orçamento de texto continua em 32.000 caracteres.
+Cada instância ativa do servidor reaproveita até 64 respostas válidas por 30 minutos, identificadas pelo modelo e pelo conteúdo completo da questão, incluindo imagens. Pedidos idênticos em andamento compartilham uma consulta; erros e abstenções não são guardados como respostas. Durante um limite do provedor, a instância conserva a espera por modelo para evitar chamadas repetidas. Esse cache e essa espera são temporários e locais à instância, não um armazenamento ou controle global.
+
+A conta gratuita do serviço de IA pode ser usada com os modelos oferecidos, sujeita às cotas da organização no [Console do serviço de IA](https://console.groq.com/docs/rate-limits). Quando o serviço de IA retorna 429, não há nova tentativa automática. O servidor preserva `Retry-After` (ou usa 60 segundos) e o painel bloqueia novas consultas durante a contagem regressiva. Os pedidos textuais enviam instruções apenas do formato atual e usam um limite de saída adequado ao tipo de questão. Imagens consomem mais tokens da cota gratuita: o serviço de IA documenta 2.048 tokens de entrada por imagem. O envio usa uma única consulta por questão, com até três imagens; dados de imagem não são repetidos no texto do pedido. O corpo da API é limitado a 3 MB com imagens e 48 KB sem imagens; o orçamento de texto continua em 32.000 caracteres.
 
 Somente o enunciado, as alternativas ou opções das lacunas, os limites do campo de texto, as imagens reconhecidas dentro da questão e o modelo são enviados ao servidor e ao serviço de IA. O nome da tarefa e o restante da página ficam no navegador. Imagens são compactadas no navegador quando possível; se uma imagem pública bloquear a captura por CORS, seu endereço HTTPS pode ser encaminhado ao serviço de IA. O servidor não baixa endereços de imagens. O hub não usa o RA ou a senha do portal, nem envia automaticamente cookies ou o restante da página. Não grava credenciais no navegador.
 

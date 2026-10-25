@@ -246,3 +246,57 @@ test('the BatataHub canonical API alias uses the same strict public question tra
   assert.equal(request.options.headers.Authorization, undefined);
   assert.deepEqual(Object.keys(JSON.parse(request.options.body)).sort(), ['model', 'question']);
 });
+
+test('economy pacing spaces request starts and reports the wait without extra calls', async () => {
+  const starts = [], waits = [];
+  const client = createHostedClient({endpoint, public:true, minIntervalMs:70,
+    onWait:seconds=>waits.push(seconds), fetchImpl:async()=>{starts.push(Date.now());return Response.json(answer);}});
+  await client.solve({question});
+  await client.solve({question:{...question,prompt:'Outra questão: 2 + 2?'}});
+  assert.equal(starts.length,2);
+  assert.ok(starts[1]-starts[0]>=60);
+  assert.ok(waits.some(seconds=>seconds>0));
+  assert.equal(waits.at(-1),0);
+});
+
+test('pause while waiting cancels the queued query before sending it', async () => {
+  let calls=0;
+  const waits=[];
+  const client=createHostedClient({endpoint,public:true,minIntervalMs:6000,
+    onWait:seconds=>waits.push(seconds),fetchImpl:async()=>{calls++;return Response.json(answer);}});
+  await client.solve({question});
+  const controller=new AbortController();
+  const pending=client.solve({question,signal:controller.signal});
+  controller.abort();
+  await assert.rejects(pending,error=>error.code==='ABORTED');
+  assert.equal(calls,1);
+  assert.ok(waits[0]>0);
+});
+
+test('image pacing accounts for each attachment and a slow response uses the existing interval',async()=>{
+  let clock=1000,calls=0;
+  const waits=[];
+  const client=createHostedClient({endpoint,public:true,minIntervalMs:6000,visionIntervalMs:20000,now:()=>clock,
+    onWait:seconds=>waits.push(seconds),fetchImpl:async()=>{calls++;return Response.json(answer);}});
+  await client.solve({question:{...question,images:[visionImage,{...visionImage,label:'Segunda imagem'}]}});
+  clock+=39999;
+  const controller=new AbortController();
+  const pending=client.solve({question,signal:controller.signal});
+  controller.abort();
+  await assert.rejects(pending,error=>error.code==='ABORTED');
+  assert.equal(calls,1);
+  assert.equal(waits[0],1);
+  clock+=1;
+  await client.solve({question});
+  assert.equal(calls,2);
+});
+
+test('concurrent distinct queries reserve separate starts instead of waking into a burst',async()=>{
+  const starts=[];
+  const client=createHostedClient({endpoint,public:true,minIntervalMs:45,
+    fetchImpl:async()=>{starts.push(Date.now());return Response.json(answer);}});
+  await Promise.all([1,2,3].map(index=>client.solve({question:{...question,prompt:`Questão ${index}`}})));
+  assert.equal(starts.length,3);
+  assert.ok(starts[1]-starts[0]>=35);
+  assert.ok(starts[2]-starts[1]>=35);
+});

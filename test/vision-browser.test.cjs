@@ -176,6 +176,11 @@ test('unsupported visual content and canceling image loading stop before any API
 test('replacing an image while its answer is pending rejects the old result and never marks it', async () => {
   const { context, page } = await setup({ holdAnswers: true });
   try {
+    // This scenario needs an in-flight provider result, rather than the
+    // valid answer cached by the earlier test of the same chart.
+    await page.locator('#visual-question .main .ql-editor p').evaluate(node => {
+      node.textContent = 'Observe o gráfico que pode ser atualizado. Qual é o valor da barra verde?';
+    });
     await page.getByRole('button', { name: 'Responder tarefa', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#lume-groq-hub').shadowRoot.querySelector('.status-text').textContent === 'Analisando imagens…');
     const end = Date.now() + 4000;

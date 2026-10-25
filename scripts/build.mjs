@@ -5,7 +5,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const modules = ['image-input.js', 'page-adapter.js', 'groq-client.js', 'hosted-client.js', 'hub.js'];
 const sources = await Promise.all(modules.map(name => readFile(path.join(root, 'src', name), 'utf8')));
 const body = sources.map((source, index) => `\n// ${modules[index]}\n${source.replace(/^import\s*\{[^}]+\}\s*from\s*['"]\.\/image-input\.js['"];?\s*/gm, '').replace(/\bexport\s+(?=(?:async\s+)?(?:function|const|class)\b)/g, '')}`).join('\n');
-const bundle = `/* Lume · BatataHub v3.7.1 | Hub compacto com respostas e preenchimento automático. */\n(() => {\n'use strict';\n${body}\n})();\n`;
+const bundle = `/* Lume · BatataHub v3.8.0 | Hub compacto com respostas e preenchimento automático. */\n(() => {\n'use strict';\n${body}\n})();\n`;
 await mkdir(path.join(root, 'dist'), {recursive:true});
 await writeFile(path.join(root, 'dist/hub.js'), bundle);
 await writeFile(path.join(root, 'dist/hub-groq.js'), bundle);

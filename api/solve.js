@@ -278,13 +278,115 @@ function publicFailure(error) {
     ABORTED: [408, 'Consulta cancelada.'],
   };
   const [status, message] = known[error?.code] || [502, 'Não foi possível consultar o serviço de IA do BatataHub. Tente novamente.'];
-  const retryAfter = error?.code === 'RATE_LIMIT' && Number.isFinite(error.retryAfter) && error.retryAfter > 0
-    ? Math.min(86400, Math.ceil(error.retryAfter)) : undefined;
+  const retryAfter = error?.code === 'RATE_LIMIT'
+    ? (Number.isFinite(error.retryAfter) && error.retryAfter > 0 ? Math.min(86400, Math.ceil(error.retryAfter)) : 60)
+    : undefined;
   return { status, code: known[error?.code] ? error.code : 'API', message, retryAfter };
 }
 
 export function createSolveHandler({ env = process.env, client = createGroqClient(), now = Date.now } = {}) {
   const limiter = createRequestLimiter({ now });
+  // Best effort within a warm function instance, never a distributed quota.
+  // Store only the exact request digest and its validated public answer.
+  const answers = new Map();
+  const pending = new Map();
+  const cooldowns = new Map();
+  const cacheTtl = 30 * 60 * 1000;
+  const cancelled = () => Object.assign(new Error('Consulta cancelada.'), { code: 'ABORTED' });
+  const limited = seconds => Object.assign(new Error('Limite de consultas atingido.'), { code: 'RATE_LIMIT', retryAfter: seconds });
+
+  function prune(current) {
+    for (const [key, entry] of answers) {
+      if (current < entry.createdAt || current >= entry.expiresAt) answers.delete(key);
+    }
+    for (const [model, entry] of cooldowns) {
+      if (current < entry.startedAt || current >= entry.until) cooldowns.delete(model);
+    }
+  }
+
+  function hasAnswer(answer, question) {
+    if (question.kind === 'text') return Boolean(answer.text);
+    if (question.kind === 'blanks') return answer.selections.length > 0;
+    if (question.kind === 'order') return answer.order.length > 0;
+    return answer.indices.length > 0;
+  }
+
+  async function sharedSolve({ question, model, signal }) {
+    if (signal.aborted) throw cancelled();
+    const current = now();
+    prune(current);
+    const key = createHash('sha256').update(JSON.stringify({ model, question })).digest('hex');
+    const cached = answers.get(key);
+    if (cached) {
+      answers.delete(key);
+      answers.set(key, cached);
+      return cached.answer;
+    }
+
+    let entry = pending.get(key);
+    if (entry?.controller.signal.aborted) {
+      pending.delete(key);
+      entry = undefined;
+    }
+    if (!entry) {
+      const cooldown = cooldowns.get(model);
+      if (cooldown) throw limited(Math.max(1, Math.ceil((cooldown.until - current) / 1000)));
+      // Upstream calls normally time out after 35 seconds. Bound outstanding
+      // work too, including clients that fail to honor that timeout.
+      if (pending.size >= 64) throw limited(60);
+      entry = { controller: new AbortController(), waiters: 0, settled: false, promise: null };
+      pending.set(key, entry);
+      const work = entry;
+      work.promise = Promise.resolve().then(async () => {
+        if (work.controller.signal.aborted) throw cancelled();
+        const raw = await client.solve({ apiKey: env.GROQ_API_KEY, question, model, signal: work.controller.signal });
+        if (work.controller.signal.aborted) throw cancelled();
+        const answer = projectAnswer(raw, question);
+        if (work.waiters > 0 && hasAnswer(answer, question)) {
+          const completedAt = now();
+          prune(completedAt);
+          answers.delete(key);
+          answers.set(key, { answer, createdAt: completedAt, expiresAt: completedAt + cacheTtl });
+          while (answers.size > 64) answers.delete(answers.keys().next().value);
+        }
+        return answer;
+      }).catch(error => {
+        if (error?.code === 'RATE_LIMIT') {
+          const startedAt = now();
+          const seconds = publicFailure(error).retryAfter;
+          const previous = cooldowns.get(model);
+          cooldowns.set(model, { startedAt, until: Math.max(previous?.until || 0, startedAt + seconds * 1000) });
+        }
+        throw error;
+      }).finally(() => {
+        work.settled = true;
+        if (pending.get(key) === work) pending.delete(key);
+      });
+    }
+
+    // A disconnected visitor releases only its own waiter. Other visitors
+    // awaiting this exact request keep the single upstream call alive.
+    const work = entry;
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const finish = (settle, value) => {
+        if (done) return;
+        done = true;
+        signal.removeEventListener('abort', onAbort);
+        work.waiters--;
+        if (work.waiters === 0 && !work.settled) {
+          work.controller.abort();
+          if (pending.get(key) === work) pending.delete(key);
+        }
+        settle(value);
+      };
+      const onAbort = () => finish(reject, cancelled());
+      work.waiters++;
+      work.promise.then(value => finish(resolve, value), error => finish(reject, error));
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+  }
 
   return async function solveHandler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
@@ -347,8 +449,8 @@ export function createSolveHandler({ env = process.env, client = createGroqClien
     if (req.aborted) controller.abort();
     try {
       const { question, model } = validateBody(await readBody(req), env);
-      const answer = await client.solve({ apiKey: env.GROQ_API_KEY, question, model, signal: controller.signal });
-      return send(200, projectAnswer(answer, question));
+      const answer = await sharedSolve({ question, model, signal: controller.signal });
+      return send(200, answer);
     } catch (error) {
       const safe = publicFailure(error);
       if (safe.retryAfter) res.setHeader('Retry-After', String(safe.retryAfter));
