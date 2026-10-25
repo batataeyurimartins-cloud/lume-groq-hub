@@ -1,6 +1,6 @@
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.8.1';
+  const version = '3.7.0';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
@@ -61,15 +61,11 @@ function mountLumeHub() {
   const client = hostedConfig ? createHostedClient(hostedConfig) : createGroqClient();
   const events = new AbortController();
   const toastTimers = new Map();
-  // Only deadlines live in this tab's shared memory: never keys or question text.
-  const cooldownSymbol = Symbol.for('batatahub.lume.cooldowns');
-  const cooldowns = window[cooldownSymbol] instanceof Map ? window[cooldownSymbol] : new Map();
-  window[cooldownSymbol] = cooldowns;
   const state = {
     key: hostedConfig ? hostedConfig.token : '', model: 'openai/gpt-oss-120b', selectors: {}, active: false, processing: false,
     closed: false, minimized: false, settingsOpen: false, controller: null, run: 0,
     handled: new Map(), warnings: new Set(), count: 0, undo: null, undoEntry: null,
-    dirty: false, timer: null, task: null, completed: false, answered: new Set(), readySignature: '', readySince: 0, bannerTimer: null, cooldownTimer: null,
+    dirty: false, timer: null, task: null, completed: false, answered: new Set(), readySignature: '', readySince: 0, bannerTimer: null,
   };
   if (hostedConfig) {
     $('.api-key').closest('.field').hidden = true;
@@ -244,61 +240,15 @@ function mountLumeHub() {
   }
   function updateControls() {
     if (state.closed) return;
-    const remaining = cooldownRemaining();
-    $('.toggle-label').textContent = state.completed ? 'Tarefa concluída' : remaining ? `Aguarde ${remaining} s` : state.active ? 'Pausar tarefa' : 'Responder tarefa';
+    $('.toggle-label').textContent = state.completed ? 'Tarefa concluída' : state.active ? 'Pausar tarefa' : 'Responder tarefa';
     $('.panel').dataset.state = state.completed ? 'complete' : state.active ? 'working' : 'idle';
     $('.mini').dataset.state = $('.panel').dataset.state;
     $('.status-caption').textContent = state.completed ? 'Tudo preenchido' : state.active ? 'Tarefa em andamento' : 'Uma tarefa por vez';
     $('.toggle').dataset.active = String(state.active);
-    $('.toggle').disabled = state.completed || Boolean(remaining) || (!state.active && state.processing);
+    $('.toggle').disabled = state.completed || (!state.active && state.processing);
     $('.status').dataset.active = String(state.active);
     $('.save-settings').disabled = state.processing;
     $('.undo').disabled = state.processing || !state.undo;
-    if (remaining) {
-      status(`Limite de consultas · tente em ${remaining} s`);
-      if (state.cooldownTimer === null) state.cooldownTimer = setInterval(() => {
-        if (!cooldownRemaining()) {
-          clearInterval(state.cooldownTimer);
-          state.cooldownTimer = null;
-          status('Espera concluída · clique em Responder tarefa');
-        }
-        updateControls();
-      }, 1000);
-    } else if (state.cooldownTimer !== null) {
-      clearInterval(state.cooldownTimer);
-      state.cooldownTimer = null;
-    }
-  }
-  function cooldownKey() {
-    // Public aliases use the same server quota. Private endpoints and direct
-    // models have their own buckets; credentials never become map keys.
-    if (hostedConfig?.public) return 'hosted:public';
-    if (hostedConfig) {
-      try { return `hosted:${new URL(hostedConfig.endpoint).origin}`; }
-      catch { return 'hosted:default'; }
-    }
-    return `direct:${state.model}`;
-  }
-  function cooldownRemaining() {
-    const now = Date.now();
-    for (const [key, until] of cooldowns) if (!Number.isFinite(until) || until <= now) cooldowns.delete(key);
-    return Math.max(0, Math.ceil(((cooldowns.get(cooldownKey()) || 0) - now) / 1000));
-  }
-  function rememberCooldown(error) {
-    const seconds = Number(error.retryAfter);
-    const delay = Number.isFinite(seconds) && seconds > 0 ? Math.min(86400, Math.ceil(seconds)) : 60;
-    cooldownRemaining();
-    const key = cooldownKey();
-    const until = Math.max(cooldowns.get(key) || 0, Date.now() + delay * 1000);
-    cooldowns.delete(key);
-    cooldowns.set(key, until);
-    while (cooldowns.size > 8) cooldowns.delete(cooldowns.keys().next().value);
-  }
-  function holdForCooldown() {
-    if (!cooldownRemaining()) return false;
-    if (state.active) pause(false);
-    updateControls();
-    return true;
   }
   function setSettings(open) {
     state.settingsOpen = open;
@@ -331,7 +281,6 @@ function mountLumeHub() {
   function start() {
     syncTask();
     if (state.closed || state.active || state.processing || state.completed) return;
-    if (holdForCooldown()) return;
     if (!state.key && !hostedConfig?.public) {
       setSettings(true);
       $('.api-key').focus();
@@ -354,7 +303,6 @@ function mountLumeHub() {
   async function processPage() {
     syncTask();
     if (!state.active || state.closed || state.processing) return;
-    if (holdForCooldown()) return;
     state.processing = true;
     state.dirty = false;
     const run = state.run;
@@ -419,7 +367,6 @@ function mountLumeHub() {
             status('Analisando imagens…');
             notify('Analisando imagens…');
           }
-          if (holdForCooldown()) break;
           const answer = await client.solve({ apiKey: state.key, model: state.model, question: preparedQuestion, signal: controller.signal });
           querying = false;
           syncTask();
@@ -436,7 +383,7 @@ function mountLumeHub() {
           if (kind === 'text' ? typeof payload !== 'string' || !payload.trim() : !Array.isArray(payload) || !payload.length) {
             state.handled.set(key, { status: 'skipped' });
             notify('Sem resposta suficiente. Questão ignorada.');
-            if (typeof answer.explanation === 'string' && answer.explanation.trim()) {
+            if (kind === 'text' && typeof answer.explanation === 'string' && answer.explanation.trim()) {
               const reason = answer.explanation.trim();
               notify(reason.length > 240 ? `${reason.slice(0, 237)}…` : reason);
             }
@@ -469,9 +416,8 @@ function mountLumeHub() {
           if (state.task !== task) break;
           if (state.closed || !state.active || run !== state.run || controller.signal.aborted || error.code === 'ABORTED') break;
           state.handled.set(key, { status: 'error' });
-          if (error.code === 'RATE_LIMIT') rememberCooldown(error);
           pause(false);
-          if (querying && error.code !== 'RATE_LIMIT') status('Erro na consulta · veja o aviso');
+          if (querying) status('Erro na consulta · veja o aviso');
           notify(error.message || 'Não foi possível responder. Tente iniciar novamente.', 'error');
           break;
         } finally {
@@ -557,7 +503,6 @@ function mountLumeHub() {
     events.abort();
     observer.disconnect();
     clearTimeout(state.timer);
-    clearInterval(state.cooldownTimer);
     clearInterval(routeTimer);
     hideTaskBanner();
     for (const timer of toastTimers.values()) clearTimeout(timer);

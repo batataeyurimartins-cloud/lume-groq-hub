@@ -1,6 +1,6 @@
 {
   "name": "lume-batatahub",
-  "version": "3.8.1",
+  "version": "3.7.0",
   "private": true,
   "type": "module",
   "description": "Lume do BatataHub: hub compacto de questões e imagens.",
@@ -12,7 +12,5 @@
   "devDependencies": {
     "playwright": "^1.62.1"
   },
-  "engines": {
-    "node": "24.x"
-  }
+  "engines": { "node": "24.x" }
 }

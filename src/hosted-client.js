@@ -1,35 +1,13 @@
 // Public bookmarks never contain credentials; the provider key stays on the server.
 import { VISION_MODEL, cleanQuestionImages, questionTextSize } from './image-input.js';
 
-export function createHostedClient({ endpoint, token, public: publicAccess = false, fetchImpl = globalThis.fetch, timeoutMs = 45000,
-  minIntervalMs = 0, visionIntervalMs = 0, onWait = () => {}, now = Date.now } = {}) {
+export function createHostedClient({ endpoint, token, public: publicAccess = false, fetchImpl = globalThis.fetch, timeoutMs = 45000 } = {}) {
   let url;
   try { url = new URL(endpoint); } catch { throw new Error('Endereço do servidor inválido. Copie o script novamente no instalador.'); }
   if (url.protocol !== 'https:' || !['/api/solve', '/api/lume/solve'].includes(url.pathname) || url.username || url.password || url.search || url.hash) {
     throw new Error('Endereço do servidor inválido. Copie o script novamente no instalador.');
   }
   function failure(code, message) { return Object.assign(new Error(message), { code }); }
-  const boundedInterval = value => Number.isFinite(value) ? Math.max(0, Math.min(60000, value)) : 0;
-  let nextRequestAt = 0;
-  // Reserve request starts, rather than adding a delay after a response. A
-  // slow response already provides spacing; pausing a queued call cancels it.
-  async function waitForTurn(signal, interval) {
-    const notify = seconds => { try { onWait(seconds); } catch {} };
-    while (nextRequestAt > now()) {
-      if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
-      const remaining = nextRequestAt - now();
-      notify(Math.ceil(remaining / 1000));
-      await new Promise((resolve, reject) => {
-        const abort = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(failure('ABORTED', 'Consulta cancelada.')); };
-        const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, Math.min(1000, remaining));
-        signal?.addEventListener('abort', abort, { once: true });
-        if (signal?.aborted) abort();
-      });
-    }
-    if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
-    nextRequestAt = now() + interval;
-    notify(0);
-  }
   const messages = {
     AUTH: 'O código de acesso foi recusado. Gere o script novamente no instalador.',
     UNAUTHORIZED: 'O código de acesso foi recusado. Gere o script novamente no instalador.',
@@ -41,14 +19,6 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
     FORMAT: 'O servidor não retornou uma resposta válida. Tente novamente.',
     TIMEOUT: 'A consulta demorou demais. Tente iniciar novamente.',
     ORIGIN: 'Este site não está autorizado a usar o hub hospedado.',
-  };
-  const textFormatMessages = {
-    TRUNCATED: 'A resposta de texto foi interrompida pela IA antes de terminar. Tente novamente.',
-    TEXT_LENGTH: 'A IA não respeitou o limite de caracteres desta questão. Nada foi preenchido.',
-    TEXT_SHAPE: 'A IA não devolveu o texto no formato solicitado. Nada foi preenchido.',
-    METADATA: 'A resposta de texto veio incompleta. Nada foi preenchido.',
-    INVALID_JSON: 'A IA devolveu uma resposta de texto ilegível. Tente novamente.',
-    ENVELOPE: 'A IA não devolveu uma resposta de texto completa. Tente novamente.',
   };
   function cleanQuestion(question) {
     if (!question || typeof question !== 'object' || Array.isArray(question)
@@ -122,12 +92,6 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
     if (!publicAccess && !token) throw failure('INPUT', messages.INPUT);
     const clean = cleanQuestion(question);
     const data = { question: clean, model: clean.images?.length ? VISION_MODEL : model };
-    const interval = clean.images?.length
-      ? Math.max(boundedInterval(minIntervalMs), Math.min(60000, boundedInterval(visionIntervalMs) * clean.images.length))
-      : boundedInterval(minIntervalMs);
-    if (nextRequestAt > now()) await waitForTurn(signal, interval);
-    else nextRequestAt = now() + interval;
-    if (signal?.aborted) throw failure('ABORTED', 'Consulta cancelada.');
     const controller = new AbortController();
     let timedOut = false;
     const abort = () => controller.abort();
@@ -143,9 +107,6 @@ export function createHostedClient({ endpoint, token, public: publicAccess = fal
       if (controller.signal.aborted) throw failure('ABORTED', 'Consulta cancelada.');
       if (!response.ok) {
         const code = answer?.error?.code;
-        if (code === 'FORMAT' && clean.kind === 'text' && Object.hasOwn(textFormatMessages, answer?.error?.reason)) {
-          throw failure('FORMAT', textFormatMessages[answer.error.reason]);
-        }
         if (response.status === 429 && code === 'RATE_LIMIT') {
           const rawDelay = response.headers?.get?.('retry-after') || '';
           const seconds = /^\d+$/.test(rawDelay) ? Number(rawDelay) : NaN;

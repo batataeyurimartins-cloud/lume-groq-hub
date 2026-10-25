@@ -73,7 +73,7 @@ test('hosted bundle rejects invalid answer indices and cancellation prevents lat
     // Invalid provider data pauses the hub. Explicitly restart the failed
     // question, then hold that response so pause can reject its late result.
     await page.getByRole('button',{name:'Responder tarefa',exact:true}).click();
-    const end=Date.now()+10000;
+    const end=Date.now()+5000;
     while(requests.length<2) {
       if(Date.now()>end)throw new Error('The second hosted request did not start');
       await page.waitForTimeout(10);

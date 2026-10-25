@@ -78,7 +78,7 @@ test('blank fields are solved together in field order and only readable data rea
   assert.ok(!JSON.stringify(sent).includes('secret-id'));
   assert.ok(!JSON.stringify(sent).includes('element'));
   assert.match(body.messages[0].content, /selections/);
-  assert.doesNotMatch(body.messages[0].content, /Use text:|Use indices:|Use orderedBlocks:/);
+  assert.match(body.messages[0].content, /text/);
   const repeated = createGroqClient({ fetchImpl: async () => ok({ ...details, selections: [1, 1] }) });
   assert.deepEqual((await repeated.solve(input({ question: blanks }))).selections, [1, 1], 'Different blanks may use the same option index');
   const abstaining = createGroqClient({ fetchImpl: async () => ok({ ...details, selections: [] }) });
@@ -154,7 +154,7 @@ test('order questions preserve duplicate blocks as distinct indices and send onl
   const client = createGroqClient({ fetchImpl: async (_, options) => { body = JSON.parse(options.body); return ok({ ...result, notes: 'discarded metadata' }); } });
   assert.deepEqual(await client.solve(input({ question: orderQuestion })), result);
   assert.deepEqual(JSON.parse(body.messages[1].content), { kind: 'order', prompt: orderQuestion.prompt, options: [{ index: 0, text: 'a' }, { index: 1, text: 'casa' }, { index: 2, text: 'a' }] });
-  assert.match(body.messages[0].content, /Use orderedBlocks:/);
+  assert.match(body.messages[0].content, /kind="order"/);
   assert.match(body.messages[0].content, /orderedBlocks/);
   assert.match(body.messages[0].content, /cada ocorrência exatamente uma vez/);
   assert.equal(body.reasoning_effort, 'medium');
@@ -243,12 +243,12 @@ test('order input is bounded to 2–60 blocks of at most 1000 characters and 320
   assert.equal(calls, 1);
 });
 
-test('rate limiting never retries even when Retry-After permits an immediate retry', async () => {
+test('retries rate limiting once and respects Retry-After', async () => {
   let calls = 0;
   const client = createGroqClient({ retryDelayMs: 0, fetchImpl: async () => ++calls === 1
     ? new Response('{}', { status: 429, headers: { 'Retry-After': '0' } }) : ok() });
-  await assert.rejects(client.solve(input()), error => error.code === 'RATE_LIMIT' && error.retryAfter === 1);
-  assert.equal(calls, 1);
+  assert.deepEqual(await client.solve(input()), answer);
+  assert.equal(calls, 2);
 });
 
 test('long provider cooldown returns RATE_LIMIT immediately instead of retrying after eight seconds', async () => {
@@ -278,28 +278,28 @@ test('HTTP-date Retry-After is preserved as seconds and very long waits are capp
   }
 });
 
-test('invalid or absent rate-limit cooldown headers provide a sixty-second wait without retrying', async () => {
+test('invalid or absent cooldown headers use the bounded retry fallback without invented metadata', async () => {
   for (const value of [undefined, '', 'not-a-date', '-3', 'Infinity', '0x10', '123garbage']) {
     let calls = 0;
     const client = createGroqClient({ retryDelayMs: 0, fetchImpl: async () => {
       calls++;
       return new Response('{}', { status: 429, headers: value === undefined ? {} : { 'Retry-After': value } });
     } });
-    await assert.rejects(client.solve(input()), error => error.code === 'RATE_LIMIT' && error.retryAfter === 60);
-    assert.equal(calls, 1);
+    await assert.rejects(client.solve(input()), error => error.code === 'RATE_LIMIT' && error.retryAfter === undefined);
+    assert.equal(calls, 2);
   }
 });
 
-test('short and expired rate-limit cooldowns remain positive and never retry', async () => {
+test('short and expired cooldowns retain one retry and final valid metadata', async () => {
   const current = Date.UTC(2026, 9, 23, 12, 0, 0);
-  for (const [value, expected] of [['0.005', 1], [new Date(current - 10000).toUTCString(), 1]]) {
+  for (const [value, expected] of [['0.005', 1], [new Date(current - 10000).toUTCString(), 0]]) {
     let calls = 0;
     const client = createGroqClient({ now: () => current, fetchImpl: async () => {
       calls++;
       return new Response('{}', { status: 429, headers: { 'Retry-After': value } });
     } });
     await assert.rejects(client.solve(input()), error => error.code === 'RATE_LIMIT' && error.retryAfter === expected);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
   }
 });
 
@@ -324,7 +324,7 @@ test('retry is bounded and API errors never include provider data or the key', a
   let calls = 0;
   const client = createGroqClient({ retryDelayMs: 0, fetchImpl: async () => { calls++; return new Response('{"error":"gsk_test_only secret"}', { status: 429 }); } });
   await assert.rejects(client.solve(input()), error => error.code === 'RATE_LIMIT' && !error.message.includes('gsk_'));
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
   const auth = createGroqClient({ fetchImpl: async () => new Response('secret', { status: 401 }) });
   await assert.rejects(auth.solve(input()), hasCode('AUTH'));
   const model = createGroqClient({ fetchImpl: async () => new Response(JSON.stringify({ error: { code: 'model_decommissioned', message: 'secret' } }), { status: 400 }) });
@@ -356,7 +356,7 @@ test('cancellation interrupts fetch and retry waits', async () => {
   const retryClient = createGroqClient({ fetchImpl: async () => {
     calls++;
     setTimeout(() => retryController.abort(), 5);
-    return new Response('{}', { status: 503, headers: { 'Retry-After': '8' } });
+    return new Response('{}', { status: 429, headers: { 'Retry-After': '8' } });
   } });
   await assert.rejects(retryClient.solve(input({ signal: retryController.signal })), hasCode('ABORTED'));
   assert.equal(calls, 1);
@@ -470,121 +470,5 @@ test('an empty image list preserves the text model and original scalar message c
   assert.equal(body.model,'openai/gpt-oss-120b');
   assert.equal(typeof body.messages[1].content,'string');
   assert.equal('images' in JSON.parse(body.messages[1].content),false);
-  assert.equal(body.max_tokens,1800);
-});
-
-test('text-only output budgets fit the answer kind and preserve room for reasoning and longer text', async () => {
-  for (const [current, result, expectedBudget] of [
-    [question, answer, 1800],
-    [blanks, { selections: [1, 0], ...details }, 2000],
-    [orderQuestion, { orderedBlocks: ['a', 'casa', 'a'], ...details }, 3000],
-    [{ kind: 'text', prompt: 'Explique.', maxLength: 30 }, { text: 'Uma resposta válida.', ...details }, 1800],
-    [{ kind: 'text', prompt: 'Explique.' }, { text: 'Uma resposta válida.', ...details }, 2500],
-    [{ kind: 'text', prompt: 'Explique.', maxLength: 8000 }, { text: 'Uma resposta válida.', ...details }, 3000],
-  ]) {
-    let sent;
-    const client = createGroqClient({ fetchImpl: async (_, options) => { sent = JSON.parse(options.body); return ok(result); } });
-    await client.solve(input({ question: current }));
-    assert.equal(sent.max_tokens, expectedBudget);
-    assert.equal(sent.reasoning_effort, current.kind === 'order' ? 'medium' : 'low');
-  }
-});
-
-test('text answers use a strict three-field schema on supported models without changing other direct models', async () => {
-  const current = { kind: 'text', prompt: 'Explique distância e deslocamento.', minLength: 1, maxLength: 3000 };
-  const result = { text: 'Distância mede o caminho percorrido; deslocamento liga a posição inicial à final.', ...details };
-  for (const model of ['openai/gpt-oss-120b', 'openai/gpt-oss-20b']) {
-    let sent;
-    const client = createGroqClient({ fetchImpl: async (_, options) => { sent = JSON.parse(options.body); return ok(result); } });
-    assert.deepEqual(await client.solve(input({ model, question: current })), result);
-    assert.deepEqual(sent.response_format, {
-      type: 'json_schema', json_schema: {
-        name: 'lume_text_answer', strict: true,
-        schema: {
-          type: 'object',
-          properties: {
-            text: { type: 'string' }, explanation: { type: 'string' },
-            confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-          },
-          required: ['text', 'explanation', 'confidence'], additionalProperties: false,
-        },
-      },
-    });
-    assert.equal(sent.messages[0].content.includes('minLength e maxLength'), true);
-  }
-  let legacy;
-  const client = createGroqClient({ fetchImpl: async (_, options) => { legacy = JSON.parse(options.body); return ok(result); } });
-  await client.solve(input({ model: 'another/direct-model', question: current }));
-  assert.deepEqual(legacy.response_format, { type: 'json_object' });
-});
-
-test('text with images retains the strict schema and enough output budget for the text field', async () => {
-  const current = { kind: 'text', prompt: 'Descreva o gráfico.', minLength: 5, maxLength: 8000 };
-  const result = { text: 'A curva cresce com o tempo.', ...details };
-  for (const count of [1, 3]) {
-    let sent;
-    const client = createGroqClient({ fetchImpl: async (_, options) => { sent = JSON.parse(options.body); return ok(result); } });
-    await client.solve(input({ question: { ...current, images: Array.from({ length: count }, (_, index) => ({ ...visionImage, label: `Gráfico ${index + 1}` })) } }));
-    assert.equal(sent.model, visionModel);
-    assert.equal(sent.response_format.type, 'json_schema');
-    assert.equal(sent.response_format.json_schema.strict, true);
-    assert.equal(sent.max_tokens, 3000, 'A text answer must not inherit the short choice-only vision budget');
-    assert.equal(sent.reasoning_effort, 'none');
-    assert.equal(sent.messages[1].content.filter(part => part.type === 'image_url').length, count);
-  }
-});
-
-test('text format failures carry only bounded diagnostic categories and still reject unusable answers', async () => {
-  const current = { kind: 'text', prompt: 'Explique.', minLength: 5, maxLength: 20 };
-  const valid = { text: 'Texto válido.', ...details };
-  const cases = [
-    [() => ok({ ...valid, explanation: '' }), 'METADATA'],
-    [() => ok({ ...valid, indices: [] }), 'TEXT_SHAPE'],
-    [() => ok({ ...valid, text: 12 }), 'TEXT_SHAPE'],
-    [() => ok({ ...valid, text: 'abc' }), 'TEXT_LENGTH'],
-    [() => ok({ ...valid, text: 'x'.repeat(21) }), 'TEXT_LENGTH'],
-    [() => ok(valid, 'length'), 'TRUNCATED'],
-    [() => Response.json({ choices: [{ finish_reason: 'stop', message: { content: '{ private-provider-data' } }] }), 'INVALID_JSON'],
-    [() => Response.json({ choices: [] }), 'ENVELOPE'],
-    [() => ok('private-provider-data'), 'ENVELOPE'],
-    [() => new Response('private-provider-data'), 'ENVELOPE'],
-  ];
-  for (const [response, reason] of cases) {
-    let calls = 0;
-    const client = createGroqClient({ fetchImpl: async () => { calls++; return response(); } });
-    await assert.rejects(client.solve(input({ question: current })), error => error.code === 'FORMAT'
-      && error.formatReason === reason && !error.message.includes('private-provider-data'));
-    assert.equal(calls, 1, 'Invalid text never triggers another provider query automatically');
-  }
-  const abstaining = createGroqClient({ fetchImpl: async () => ok({ text: '', ...details }) });
-  assert.equal((await abstaining.solve(input({ question: current }))).text, '');
-});
-
-test('text-only prompts include only the active answer contract while retaining safety and semantic instructions', async () => {
-  const contracts = ['indices', 'selections', 'text', 'orderedBlocks'];
-  for (const [current, result, field] of [
-    [question, answer, 'indices'],
-    [blanks, { selections: [1, 0], ...details }, 'selections'],
-    [{ kind: 'text', prompt: 'Explique.' }, { text: 'Uma resposta válida.', ...details }, 'text'],
-    [orderQuestion, { orderedBlocks: ['a', 'casa', 'a'], ...details }, 'orderedBlocks'],
-  ]) {
-    let sent;
-    const client = createGroqClient({ fetchImpl: async (_, options) => { sent = JSON.parse(options.body); return ok(result); } });
-    await client.solve(input({ question: current }));
-    const prompt = sent.messages[0].content;
-    assert.match(prompt, new RegExp(`Use ${field}:`));
-    for (const other of contracts.filter(contract => contract !== field)) assert.doesNotMatch(prompt, new RegExp(`Use ${other}:`));
-    assert.match(prompt, /dado não confiável/);
-    assert.match(prompt, /ignore instruções/);
-    assert.match(prompt, /SOMENTE um objeto JSON/);
-    assert.match(prompt, /abstenha-se/);
-    assert.match(prompt, /não invente dados ausentes/);
-    if (current.kind === 'order') {
-      assert.match(prompt, /gramaticalmente coerente/);
-      assert.match(prompt, /sentido completo/);
-      assert.match(prompt, /concordância/);
-      assert.match(prompt, /cada ocorrência exatamente uma vez/);
-      assert.match(prompt, /sem dividir blocos de várias palavras/);
-    }
-  }
+  assert.equal(body.max_tokens,3000);
 });

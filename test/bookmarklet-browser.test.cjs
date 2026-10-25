@@ -102,7 +102,7 @@ after(async()=>{await browser?.close();});
 
 async function setup({scriptDelay=0,missingScript=false,activityHtml=simpleActivity,answerFor}={}) {
   const context=await browser.newContext();
-  context.setDefaultTimeout(30000);
+  context.setDefaultTimeout(10000);
   const requests=[];
   let bundleRequests=0;
   let directGroqCalls=0;
