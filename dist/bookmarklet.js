@@ -4,7 +4,7 @@
 const source = document.currentScript?.src;
 if (!source) throw new Error('Abra o Lume pelo favorito instalado no site.');
 window.__LUME_HOSTED_CONFIG__ = { endpoint: new URL('/api/lume/solve', source).href, public: true };
-/* Lume · BatataHub v3.7.0 | Hub compacto com respostas e preenchimento automático. */
+/* Lume · BatataHub v3.7.1 | Hub compacto com respostas e preenchimento automático. */
 (() => {
 'use strict';
 
@@ -87,13 +87,74 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
     }
     return true;
   }
+  // Sala's reading material is a separate INFO/SECTION card, including in
+  // one-question mode. Read only those known cards, never other answers or
+  // the surrounding page. A newer INFO or SECTION starts a new context.
+  const hasAnswerControls = element => Boolean(element.querySelector(`${CONTROL},textarea,select,[role="combobox"]`));
+  function referenceVisible(element) {
+    if (!element?.isConnected || isExcluded(element)) return false;
+    for (let item = element; item; item = item.parentElement) {
+      // A menu we opened can temporarily hide the entire activity, including
+      // sibling reading cards. Previously hidden content stays excluded.
+      const hiddenByOwnMenu = menuSession && !menuSession.hiddenBefore.has(item);
+      if (item.hasAttribute('hidden') || (item.getAttribute('aria-hidden') === 'true' && !hiddenByOwnMenu)) return false;
+      const style = view.getComputedStyle(item);
+      if (style.display === 'none' || /^(hidden|collapse)$/.test(style.visibility)) return false;
+    }
+    return true;
+  }
+  function referenceCards(root) {
+    if (!root?.isConnected) return [];
+    let information = null;
+    let inspected = 0;
+    const cardsIn = element => (element.matches('.MuiPaper-elevation3') ? [element] :
+      Array.from(element.querySelectorAll('.MuiPaper-elevation3')))
+      .filter(card => !hasAnswerControls(card) && referenceVisible(card) && card.querySelector('.ql-editor'));
+    const sectionIn = element => Array.from(element.querySelectorAll('.MuiTypography-root')).some(label => {
+      const text = normalize(label.textContent);
+      return text.length <= 80 && /^SEÇÃO\s*\d+/i.test(text) && referenceVisible(label);
+    });
+    let anchor = root;
+    for (let level = 0; anchor && level < 6; level++, anchor = anchor.parentElement) {
+      for (let sibling = anchor.previousElementSibling; sibling && inspected < 48; sibling = sibling.previousElementSibling) {
+        inspected++;
+        if (isExcluded(sibling) || sibling.matches('nav,header,footer,script,style') || hasAnswerControls(sibling)) continue;
+        if (sectionIn(sibling)) {
+          const section = cardsIn(sibling).find(card => card.closest('.MuiCollapse-root'));
+          return [section, information].filter(Boolean);
+        }
+        if (!information) {
+          const matches = cardsIn(sibling).filter(card => card.firstElementChild?.matches('.MuiTypography-subtitle2'));
+          information = matches[matches.length - 1] || null;
+        }
+      }
+      if (anchor.parentElement?.matches('body,html,main,form,nav,header,footer') || inspected >= 48) break;
+    }
+    return information ? [information] : [];
+  }
+  function referenceText(card) {
+    function visit(node) {
+      if (node.nodeType === 3) return node.textContent;
+      if (node.nodeType !== 1 || !referenceVisible(node) || isExcluded(node) ||
+          node.matches('script,style,button,svg,input,textarea,select,nav,header,footer')) return '';
+      if (node.tagName === 'BR') return '\n';
+      const text = Array.from(node.childNodes).map(visit).join('');
+      return /^(P|DIV|BLOCKQUOTE|LI|TR|H[1-6])$/.test(node.tagName) ? `${text}\n` : text;
+    }
+    return Array.from(card.querySelectorAll('.ql-editor')).filter(referenceVisible).map(editor => visit(editor)
+      .split('\n').map(line => normalize(line)).join('\n').replace(/\n{3,}/g, '\n\n').trim()).filter(Boolean).join('\n\n');
+  }
+  function withReferences(root, prompt) {
+    const references = referenceCards(root).map(referenceText).filter(Boolean);
+    return references.length ? `Textos de apoio da atividade:\n${references.join('\n\n')}\n\nQuestão:\n${prompt}` : prompt;
+  }
   const IMAGE_LIMIT = 3;
   const IMAGE_DATA_LIMIT = 700000;
   const IMAGE_DOWNLOAD_LIMIT = 8 * 1024 * 1024;
   const imageError = message => Object.assign(new Error(message), { code: 'IMAGE' });
-  function relevantImages(root) {
+  function relevantImages(root, reference = false) {
     return Array.from(root.querySelectorAll('img')).filter(image => {
-      if (!formVisible(image, root) || image.closest('button,nav,header,footer,.MuiAvatar-root,.MuiSvgIcon-root')) return false;
+      if (!(reference ? referenceVisible(image) : formVisible(image, root)) || image.closest('button,nav,header,footer,.MuiAvatar-root,.MuiSvgIcon-root')) return false;
       const width = Number(image.getAttribute('width')) || image.naturalWidth;
       const height = Number(image.getAttribute('height')) || image.naturalHeight;
       return !((width > 0 && width <= 2) && (height > 0 && height <= 2) && !normalize(image.alt));
@@ -104,26 +165,30 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
   }
   function visualContext(root, controls = [], omitted = []) {
     const wrappers = controls.map(optionWrapper);
-    const images = relevantImages(root).filter(image => !omitted.some(element => element.contains(image)));
+    const scopes = [...referenceCards(root).map(element => ({ element, reference: true })), { element: root, reference: false }];
+    const entries = scopes.flatMap(scope => relevantImages(scope.element, scope.reference).map(element => ({ element, reference: scope.reference })))
+      .filter(({ element }, index, all) => all.findIndex(item => item.element === element) === index && !omitted.some(item => item.contains(element)));
     let stem = 0;
+    let referenceCount = 0;
     const optionCounts = new Map();
-    const descriptors = images.map(element => {
-      const option = wrappers.findIndex(wrapper => wrapper === element || wrapper.contains(element));
-      const count = option < 0 ? ++stem : (optionCounts.get(option) || 0) + 1;
+    const descriptors = entries.map(({ element, reference }) => {
+      const option = reference ? -1 : wrappers.findIndex(wrapper => wrapper === element || wrapper.contains(element));
+      const count = reference ? ++referenceCount : option < 0 ? ++stem : (optionCounts.get(option) || 0) + 1;
       if (option >= 0) optionCounts.set(option, count);
       const alt = normalize(element.alt);
-      const label = `${option < 0 ? 'Imagem do enunciado' : `Alternativa ${option + 1} · imagem`} ${count}${alt ? `: ${alt}` : ''}`.slice(0, 300);
+      const label = `${reference ? 'Imagem do texto de apoio' : option < 0 ? 'Imagem do enunciado' : `Alternativa ${option + 1} · imagem`} ${count}${alt ? `: ${alt}` : ''}`.slice(0, 300);
       return { element, url: imageSource(element), label, alt, src: element.getAttribute('src') || '',
         srcset: element.getAttribute('srcset') || '', sizes: element.getAttribute('sizes') || '',
         lazy: [element.getAttribute('data-src') || '', element.getAttribute('data-original') || ''] };
     });
-    const unsupported = Array.from(root.querySelectorAll('canvas,svg,video')).filter(element => {
-      if (!formVisible(element, root) || element.closest('button,.MuiSvgIcon-root,.MuiRadio-root,.MuiCheckbox-root') ||
+    const unsupported = scopes.flatMap(scope => Array.from(scope.element.querySelectorAll('canvas,svg,video'))
+      .map(element => ({ element, root: scope.element, reference: scope.reference }))).filter(({ element, root: scopeRoot, reference }) => {
+      if (!(reference ? referenceVisible(element) : formVisible(element, scopeRoot)) || element.closest('button,.MuiSvgIcon-root,.MuiRadio-root,.MuiCheckbox-root') ||
           omitted.some(item => item.contains(element))) return false;
       if (element.tagName.toLowerCase() !== 'svg') return true;
       const bounds = element.getBoundingClientRect();
       return Boolean(element.querySelector('image')) || bounds.width > 32 || bounds.height > 32;
-    });
+    }).map(({ element }) => element);
     let issue = unsupported.length ? 'Esta questão tem gráfico em canvas, SVG ou vídeo que ainda não pode ser lido. Nenhuma resposta foi preenchida.' : '';
     if (descriptors.some(image => /^data:image\/(?!png[;,]|jpe?g[;,]|webp[;,])/i.test(image.url) || /\.(?:gif|svg|avif|bmp)(?:[?#]|$)/i.test(image.url))) {
       issue = 'Há imagens em formato não suportado nesta questão. São aceitas imagens PNG, JPEG e WebP.';
@@ -305,7 +370,10 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
     for (const element of controls) {
       const type = typeOf(element);
       const explicitRoot = settings.containerSelector ? element.closest(settings.containerSelector) : element.closest(CONTAINER);
-      const inferredList = !explicitRoot && !element.name ? muiChoiceList(element) : null;
+      // Checkbox names identify individual answer controls on some MUI pages.
+      // Their local choice list, rather than a shared or distinct name, defines
+      // the multiple-choice question. Native radio names keep their semantics.
+      const inferredList = !explicitRoot && (!element.name || type === 'checkbox') ? muiChoiceList(element) : null;
       let key;
       if (native(element) && type === 'radio' && element.name) {
         key = `radio:${uid(element.form || element.getRootNode())}:${element.name}`;
@@ -354,6 +422,7 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
         warnings.push('Um grupo sem enunciado legível foi ignorado. Configure o seletor do enunciado.');
         continue;
       }
+      prompt = withReferences(root, prompt);
       if (prompt.length > 16000 || options.some(option => option.text.length > 6000)) {
         warnings.push('Um bloco muito amplo foi ignorado. Configure o seletor da questão.');
         continue;
@@ -542,7 +611,7 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
     if (kind === 'blanks' && fields.every(field => field.type === 'mui' && /^\d+-/.test(field.element.id))) {
       prompt += ' As opções pertencem a um banco compartilhado; uma opção usada sai dos outros menus.';
     }
-    return prompt;
+    return withReferences(root, prompt);
   }
   function limitsFor(element, root) {
     // Sala renders the label even when its numeric limit is undefined. Read
@@ -621,8 +690,7 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
     const existing = listboxFor(field.element);
     if (existing) return existing;
     if (Array.from(doc.querySelectorAll('.MuiMenu-root [role="listbox"]')).some(visible)) throw new Error('Feche o menu aberto na página para continuar.');
-    const hiddenBefore = new Set();
-    for (let item = field.element; item; item = item.parentElement) if (item.getAttribute('aria-hidden') === 'true') hiddenBefore.add(item);
+    const hiddenBefore = new Set(doc.querySelectorAll('[aria-hidden="true"]'));
     menuSession = { field, hiddenBefore };
     field.element.focus();
     field.element.dispatchEvent(new view.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
@@ -860,7 +928,7 @@ function createPageAdapter({ document: doc = document, exclude = null } = {}) {
           node.matches('script,style,button,svg,input,textarea,select,nav,header,footer')) return '';
       return Array.from(node.childNodes).map(visit).join(' ');
     }
-    return clean(visit(scope));
+    return withReferences(entry.root, clean(visit(scope)));
   }
   function orderState(entry) {
     const words = bankWords(entry.bank);
@@ -1622,7 +1690,7 @@ function createHostedClient({ endpoint, token, public: publicAccess = false, fet
 // hub.js
 function mountLumeHub() {
   const globalName = '__LUME_GROQ_HUB__';
-  const version = '3.7.0';
+  const version = '3.7.1';
   const suppliedConfig = window.__LUME_HOSTED_CONFIG__;
   delete window.__LUME_HOSTED_CONFIG__;
   const hostedConfig = suppliedConfig && typeof suppliedConfig.endpoint === 'string' && (suppliedConfig.public === true || typeof suppliedConfig.token === 'string')
@@ -2005,7 +2073,7 @@ function mountLumeHub() {
           if (kind === 'text' ? typeof payload !== 'string' || !payload.trim() : !Array.isArray(payload) || !payload.length) {
             state.handled.set(key, { status: 'skipped' });
             notify('Sem resposta suficiente. Questão ignorada.');
-            if (kind === 'text' && typeof answer.explanation === 'string' && answer.explanation.trim()) {
+            if (typeof answer.explanation === 'string' && answer.explanation.trim()) {
               const reason = answer.explanation.trim();
               notify(reason.length > 240 ? `${reason.slice(0, 237)}…` : reason);
             }

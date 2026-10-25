@@ -265,13 +265,13 @@ test('pausing during lazy-menu preparation cancels reading before any AI query o
   } finally {await page.close();}
 });
 
-test('empty text, blank and ordering responses abstain without incrementing the counter, with a text explanation',async()=>{
-  for(const [kind,response] of [['text',{text:'',confidence:'low',explanation:'Faltam informações no enunciado para escrever esta resposta.'}],['blanks',{selections:[],confidence:'low'}],['order',{order:[],confidence:'low'}]]) {
+test('empty answers never increment the counter and show the reason for text and choice abstention',async()=>{
+  for(const [kind,response] of [['choice',{indices:[],confidence:'low',explanation:'O texto-base não foi fornecido para analisar as alternativas.'}],['text',{text:'',confidence:'low',explanation:'Faltam informações no enunciado para escrever esta resposta.'}],['blanks',{selections:[],confidence:'low'}],['order',{order:[],confidence:'low'}]]) {
     const page=await setup({questionKind:kind,response});
     try {
       await start(page);
       await page.getByText('Sem resposta suficiente. Questão ignorada.',{exact:true}).waitFor();
-      if(kind==='text') await page.getByText(response.explanation,{exact:true}).waitFor();
+      if(response.explanation) await page.getByText(response.explanation,{exact:true}).waitFor();
       assert.equal(await metric(page,'applies'),0);
       assert.equal(await metric(page,'solves'),1);
       await page.waitForTimeout(750);

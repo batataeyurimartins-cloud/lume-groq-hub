@@ -1,6 +1,6 @@
 # Lume · BatataHub
 
-Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos, monta frases com blocos de palavras e lê imagens das questões, com notificações em cada etapa. Versão **3.7.0**. O painel usa tons de verde grafite e lima, com ícones próprios, estados visuais de execução e conclusão e animações que respeitam a preferência por movimento reduzido.
+Hub público e compacto (286 px), sem lista ou contagem de questões detectadas. Marca alternativas, preenche lacunas e textos, monta frases com blocos de palavras e lê imagens das questões, com notificações em cada etapa. Versão **3.7.1**. O painel usa tons de verde grafite e lima, com ícones próprios, estados visuais de execução e conclusão e animações que respeitam a preferência por movimento reduzido.
 
 ## Instalar o bookmarklet
 
@@ -20,6 +20,8 @@ Após uma atualização, feche o hub no **×** e clique no mesmo favorito para c
 - **Pausar tarefa** interrompe a consulta em andamento. Retomar a mesma tarefa preserva a contagem e as questões já preenchidas.
 - Ao preencher todas as questões, o botão muda para **Tarefa concluída** e fica desativado. Abrir outra atividade zera o contador e aguarda um novo clique; consultas pendentes da tarefa anterior são canceladas.
 - As notificações mostram **Questão detectada**, **Buscando resposta…**, **Resposta detectada**, **Marcando respostas…** e **Respostas: 1**, **Respostas: 2**, etc. O contador pertence à tarefa atual e aumenta somente após confirmar o preenchimento da questão. Isso não indica correção ou nota.
+- Quando a Sala mostra um texto-base em cartões INFO ou SECTION anteriores à questão, o leitor inclui o material visível mais próximo no enunciado e também prepara suas imagens. Uma nova seção delimita esse contexto; perguntas e respostas de outros cartões não são copiadas. Alterações no texto-base invalidam uma resposta pendente.
+- Se a IA não puder responder, o aviso mostra a justificativa também nas questões de alternativas, sem contar uma resposta preenchida.
 - Nas lacunas, o hub abre os menus para ler as opções, fecha-os e consulta o serviço de IA uma vez para o conjunto. Depois preenche cada campo, mesmo quando a Sala remove as palavras escolhidas dos outros menus. O contador aumenta uma vez pela questão completa.
 - Nas questões de texto, preenche o campo **Responder** respeitando os limites de caracteres. As notificações mostram **Questão de texto detectada** e **Preenchendo respostas…**.
 - Nos blocos de palavras **CLOUD**, lê o banco completo e clica nos blocos na ordem da frase. Palavras repetidas são preservadas como blocos diferentes. O serviço de IA monta a sequência com os textos dos blocos; o cliente os converte para os índices originais, sem uma segunda consulta. Esse cuidado reduz erros de posição, mas não garante uma resposta correta. Mostra **Ordenando palavras…** e conta uma resposta após confirmar toda a sequência. **Desfazer** restaura a seleção anterior, inclusive uma frase parcialmente montada.
